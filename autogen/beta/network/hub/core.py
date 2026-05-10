@@ -108,6 +108,7 @@ from .layout import (
     agents_root,
     by_capability_path,
     channel_metadata_path,
+    channel_removed_path,
     channels_root,
     passport_path,
     resume_path,
@@ -243,6 +244,16 @@ class Hub:
         # backs ``find_envelope_by_causation`` so the default notify
         # handler can dedup duplicate replies after redelivery.
         self._causation_index: dict[str, dict[tuple[str, str], Envelope]] = {}
+        # ``hide`` violation handler: per-channel set of agent_ids whose
+        # inbound delivery is suppressed. WAL still records their outbound
+        # sends; ``_dispatch`` skips notifies to them. In-memory only —
+        # operator intervention rebuilds across hub restarts.
+        self._hidden_in_channel: dict[str, set[str]] = {}
+        # ``remove`` violation handler: per-channel set of agent_ids who
+        # can no longer send into the channel. Persisted to
+        # ``channels/{id}/removed.json`` so a restored hub re-applies the
+        # removal.
+        self._removed_from_channel: dict[str, set[str]] = {}
 
         # Task caches (observed; not owned).
         self._tasks: dict[str, TaskMetadata] = {}
@@ -341,6 +352,8 @@ class Hub:
         self._active_channels.clear()
         self._adapter_states.clear()
         self._causation_index.clear()
+        self._hidden_in_channel.clear()
+        self._removed_from_channel.clear()
         self._tasks.clear()
         self._channel_tasks.clear()
 
@@ -393,7 +406,7 @@ class Hub:
             self._expectation_sweeper = _IntervalSweeper(
                 name="expectations",
                 interval=self._expectation_sweep_interval,
-                fn=self._expectation_tick,
+                fn=self.evaluate_expectations,
             )
             self._expectation_sweeper.start()
 
@@ -454,9 +467,13 @@ class Hub:
         """
         self._violation_handlers[handler.name] = handler
 
-    async def _expectation_tick(self) -> None:
-        """One sweeper tick: evaluate every expectation on every active
-        channel; fire registered handlers on new violations.
+    async def evaluate_expectations(self) -> None:
+        """Evaluate every expectation on every active channel; fire
+        registered handlers on new violations.
+
+        Public so users running their own scheduler can drive it
+        directly without reaching into privates. The default
+        ``_ExpectationSweeper`` calls this on a periodic tick.
 
         Per-(channel, expectation, violator) dedup lives in
         ``_fired_violations`` so handlers don't re-fire on every tick.
@@ -1175,6 +1192,34 @@ class Hub:
         """
         return self._rules.get(agent_id, Rule())
 
+    def mark_hidden(self, channel_id: str, agent_id: str) -> None:
+        """Suppress live notifies to ``agent_id`` in this channel.
+
+        WAL reads still surface every envelope (audit truth is
+        unchanged); only the live notify path skips. In-memory only —
+        a hub restart drops the flag.
+        """
+        self._hidden_in_channel.setdefault(channel_id, set()).add(agent_id)
+
+    def is_hidden(self, channel_id: str, agent_id: str) -> bool:
+        return agent_id in self._hidden_in_channel.get(channel_id, set())
+
+    async def mark_removed(self, channel_id: str, agent_id: str) -> None:
+        """Bar ``agent_id`` from sending substantive envelopes into this
+        channel.
+
+        Persists to ``channels/{id}/removed.json`` so the bar survives
+        hub restart. Idempotent.
+        """
+        bucket = self._removed_from_channel.setdefault(channel_id, set())
+        if agent_id in bucket:
+            return
+        bucket.add(agent_id)
+        await self._persist_channel_removed(channel_id)
+
+    def is_removed(self, channel_id: str, agent_id: str) -> bool:
+        return agent_id in self._removed_from_channel.get(channel_id, set())
+
     # ── Tasks (observe-only) ────────────────────────────────────────────────
 
     async def observe_task(self, metadata: TaskMetadata) -> None:
@@ -1314,6 +1359,17 @@ class Hub:
             raise NotFoundError(f"sender not registered: {envelope.sender_id}")
 
         sender_rule = self._rules.get(envelope.sender_id, Rule())
+
+        # ``remove`` violation handler — once an agent is removed from a
+        # channel they can't post substantive events. Protocol envelopes
+        # (acks, opens, closes) still flow so the channel can wind down
+        # cleanly.
+        if not _is_protocol_event(envelope.event_type):
+            removed = self._removed_from_channel.get(envelope.channel_id)
+            if removed is not None and envelope.sender_id in removed:
+                raise ProtocolError(
+                    f"sender {envelope.sender_id!r} removed from channel {envelope.channel_id!r}"
+                )
 
         # Outbound access check. Self-routing is always allowed —
         # protocol broadcasts (``EV_CHANNEL_OPENED`` / ``EV_CHANNEL_CLOSED``)
@@ -1495,7 +1551,13 @@ class Hub:
         sender_name = sender_passport.name if sender_passport is not None else envelope.sender_id
         substantive = not _is_protocol_event(envelope.event_type)
 
+        hidden = self._hidden_in_channel.get(envelope.channel_id, set())
         for recipient_id in recipients:
+            # ``hide`` violation handler — agents flagged as hidden
+            # continue to see the channel in WAL reads but do not
+            # receive live notifies.
+            if recipient_id in hidden:
+                continue
             recipient_rule = self._rules.get(recipient_id)
             if recipient_rule is not None and not _match_any(sender_name, recipient_rule.access.inbound_from):
                 continue
@@ -1696,6 +1758,13 @@ class Hub:
             json.dumps(metadata.to_dict()),
         )
 
+    async def _persist_channel_removed(self, channel_id: str) -> None:
+        bucket = self._removed_from_channel.get(channel_id, set())
+        await self._store.write(
+            channel_removed_path(channel_id),
+            json.dumps(sorted(bucket)),
+        )
+
     async def _persist_task_metadata(self, metadata: TaskMetadata) -> None:
         await self._store.write(
             task_metadata_path(metadata.task_id),
@@ -1726,6 +1795,21 @@ class Hub:
             return
         metadata = ChannelMetadata.from_dict(json.loads(metadata_data))
         self._channels[channel_id] = metadata
+
+        # ``remove`` handler persistence: load the set of agents barred
+        # from posting into this channel. Loaded even when the adapter
+        # isn't registered yet — the bar is hub-level state, not
+        # adapter-level, and should re-apply once the adapter shows up.
+        removed_data = await self._store.read(channel_removed_path(channel_id))
+        if removed_data:
+            try:
+                removed_list = json.loads(removed_data)
+            except json.JSONDecodeError:
+                removed_list = []
+            if isinstance(removed_list, list):
+                self._removed_from_channel[channel_id] = {
+                    str(a) for a in removed_list if isinstance(a, str)
+                }
 
         adapter = self._adapters.get((metadata.manifest.type, metadata.manifest.version))
         if adapter is None:

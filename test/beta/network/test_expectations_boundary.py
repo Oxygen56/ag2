@@ -264,12 +264,12 @@ async def test_handler_exception_does_not_stop_sweeper() -> None:
 
     # First tick: handler raises but sweeper survives.
     clock.advance(1)  # 1s elapsed > 0s threshold
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     assert len(handler_calls) == 1  # called once, raised, but tracked
 
     # Second tick: violation deduped, handler NOT called again.
     clock.advance(1)
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     assert len(handler_calls) == 1  # no re-fire
 
     await hub.close()
@@ -324,13 +324,13 @@ async def test_two_same_name_expectations_with_different_handlers_both_fire() ->
 
     # 35s in: only the 30s expectation fires.
     clock.advance(35)
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     assert (0, "warn") in fired
     assert (1, "audit2") not in fired
 
     # 65s in: BOTH expectations should now have fired.
     clock.advance(30)  # total 65s
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     assert (0, "warn") in fired  # still there
     assert (1, "audit2") in fired  # NEW
     # Each handler fired exactly once (dedup intact).
@@ -368,7 +368,7 @@ async def test_unknown_evaluator_name_silently_ignored() -> None:
 
     clock.advance(60)
     # Must not raise.
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
 
     await hub.close()
 
@@ -402,7 +402,7 @@ async def test_unknown_handler_name_silently_ignored() -> None:
     clock.advance(1)
     # Must not raise. Audit log should also stay empty since no
     # handler was found to record anything.
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     audit = AuditLog(hub._store)
     records = await audit.read_all()
     violation_records = [r for r in records if r["kind"] == AUDIT_KIND_EXPECTATION_VIOLATED]

@@ -249,7 +249,7 @@ async def test_expectation_tick_processes_all_channels_when_one_auto_closes() ->
 
     # Advance past max_silence — both should violate.
     clock.advance(120)
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
 
     audit = await hub._audit_log.read_all()
     closed_channel_ids = {r["channel_id"] for r in audit if r["kind"] == AUDIT_KIND_CHANNEL_CLOSED}

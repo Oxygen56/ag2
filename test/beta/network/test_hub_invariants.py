@@ -531,7 +531,7 @@ async def test_two_same_name_expectations_both_fire() -> None:
 
     # Advance past the 30s threshold and tick once.
     clock.advance(45)
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
 
     # Both handlers must have fired exactly once for bob.
     assert ("s1", "acks_within") in audit_calls
@@ -539,7 +539,7 @@ async def test_two_same_name_expectations_both_fire() -> None:
 
     # A second tick at the same clock must NOT re-fire either.
     audit_calls.clear()
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     assert audit_calls == []
 
 
@@ -729,7 +729,7 @@ async def test_fired_violations_cleared_on_terminal_channel_transition() -> None
     hub._active_channels["s1"] = metadata
 
     clock.advance(45)
-    await hub._expectation_tick()
+    await hub.evaluate_expectations()
     assert "s1" in hub._fired_violations
 
     await hub._transition_channel("s1", ChannelState.CLOSED, "test_reason")

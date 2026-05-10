@@ -16,6 +16,7 @@ __all__ = (
     "by_capability_path",
     "by_name_path",
     "channel_metadata_path",
+    "channel_removed_path",
     "channel_tasks_index_path",
     "channels_root",
     "inbox_cursor_path",
@@ -106,6 +107,10 @@ def wal_path(channel_id: str) -> str:
 
 def channel_tasks_index_path(channel_id: str) -> str:
     return f"/channels/{channel_id}/tasks.json"
+
+
+def channel_removed_path(channel_id: str) -> str:
+    return f"/channels/{channel_id}/removed.json"
 
 
 # ── Tasks ────────────────────────────────────────────────────────────────────
