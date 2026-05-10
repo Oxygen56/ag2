@@ -27,6 +27,7 @@ __all__ = (
     "rule_path",
     "runtime_path",
     "skill_path",
+    "task_checkpoint_path",
     "task_events_path",
     "task_metadata_path",
     "tasks_root",
@@ -120,6 +121,10 @@ def task_metadata_path(task_id: str) -> str:
 
 def task_events_path(task_id: str) -> str:
     return f"/tasks/{task_id}/events.jsonl"
+
+
+def task_checkpoint_path(task_id: str) -> str:
+    return f"/tasks/{task_id}/checkpoint.json"
 
 
 # ── Audit ────────────────────────────────────────────────────────────────────
