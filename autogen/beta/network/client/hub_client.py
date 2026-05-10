@@ -35,6 +35,7 @@ from .plugin import NetworkPlugin
 
 if TYPE_CHECKING:
     from ..hub import Hub
+    from ..hub.core import PendingTurn
 
 __all__ = ("HubClient",)
 
@@ -173,6 +174,59 @@ class HubClient:
 
         return client
 
+    async def attach(
+        self,
+        agent: Agent,
+        *,
+        name: str,
+        attach_plugin: bool = True,
+    ) -> AgentClient:
+        """Reconnect ``agent`` to an existing identity by name.
+
+        Looks up the existing ``agent_id`` for ``name``, binds this
+        connection's endpoint to it, constructs a fresh ``AgentClient``,
+        and resumes any pending turns the prior incarnation left behind
+        (see :meth:`AgentClient.resume_pending_turns`).
+
+        Use this instead of :meth:`register` when restarting an agent
+        process whose identity was already persisted by a prior run.
+        """
+        if self._closed:
+            raise RuntimeError("HubClient is closed")
+
+        client_link = self._ensure_connected()
+
+        passport = await self._hub.get_agent(name)
+        if passport.agent_id is None:
+            raise RuntimeError(f"agent {name!r} has no agent_id")
+        agent_id = passport.agent_id
+
+        resume = await self._hub.get_resume(agent_id)
+        rule = self._hub.get_rule(agent_id)
+
+        self._hub.bind_endpoint(client_link.endpoint_id, agent_id)
+
+        client = AgentClient(
+            agent=agent,
+            passport=passport,
+            resume=resume,
+            rule=rule,
+            hub=self._hub,
+            hub_client=self,
+        )
+        self._clients[agent_id] = client
+
+        if attach_plugin:
+            plugin = NetworkPlugin(client)
+            plugin.register(agent)
+
+        # Wake up any unfinished turns from before the disconnect.
+        # Done after plugin attach so the LLM tools resolve correctly
+        # if the resumed handler immediately fires the agent's LLM.
+        await client.resume_pending_turns()
+
+        return client
+
     # ── Hub control-plane passthrough ────────────────────────────────────────
     #
     # Forwards directly to the in-process hub. A cross-process transport
@@ -269,6 +323,24 @@ class HubClient:
 
     async def read_wal(self, channel_id: str, *, since: int = 0, until: int | None = None) -> list[Envelope]:
         return await self._hub.read_wal(channel_id, since=since, until=until)
+
+    def find_envelope_by_causation(
+        self,
+        channel_id: str,
+        *,
+        sender_id: str,
+        causation_id: str,
+    ) -> Envelope | None:
+        """Idempotency query passthrough; see :meth:`Hub.find_envelope_by_causation`."""
+        return self._hub.find_envelope_by_causation(
+            channel_id,
+            sender_id=sender_id,
+            causation_id=causation_id,
+        )
+
+    async def pending_turns_for(self, agent_id: str) -> list["PendingTurn"]:
+        """Wake-up query passthrough; see :meth:`Hub.pending_turns_for`."""
+        return await self._hub.pending_turns_for(agent_id)
 
     def can_send(
         self,

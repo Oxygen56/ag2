@@ -134,6 +134,17 @@ async def _process_substantive(envelope: Envelope, client: "AgentClient") -> Non
     if not client._hub_client.can_send(envelope.channel_id, client.agent_id):
         return  # not our turn / channel closing — don't engage LLM
 
+    # If a reply with this causation has already been accepted,
+    # redelivery (or a resumed pending turn) is a no-op. Without the
+    # WAL stamp the envelope_id is empty — only check when the hub has
+    # actually accepted the inbound.
+    if envelope.envelope_id and client._hub_client.find_envelope_by_causation(
+        envelope.channel_id,
+        sender_id=client.agent_id,
+        causation_id=envelope.envelope_id,
+    ) is not None:
+        return  # already replied to this trigger; idempotent dedup
+
     adapter = client._hub_client.adapter_for(metadata.channel_id)
     channel = Channel(metadata=metadata, client=client)
     view = resolve_view_policy(client, metadata)
