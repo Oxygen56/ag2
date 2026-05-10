@@ -25,6 +25,7 @@ __all__ = (
     "EV_CONTEXT_SET",
     "EV_EXPECTATION_VIOLATED",
     "EV_PACKET",
+    "EV_QUORUM_CHANGED",
     "EV_TEXT",
     "Envelope",
     "Priority",
@@ -64,6 +65,13 @@ EV_CHANNEL_INVITE_REJECT = "ag2.channel.invite.reject"
 EV_CHANNEL_OPENED = "ag2.channel.opened"
 EV_CHANNEL_CLOSED = "ag2.channel.closed"
 EV_CHANNEL_EXPIRED = "ag2.channel.expired"
+
+# N-of-M quorum tracking. Emitted by the hub when the count of active
+# participants in a multi-party channel changes (typically a ``remove``
+# violation handler firing). ``event_data`` carries
+# ``{"remaining": int, "required": int}`` so peers can react without
+# re-walking ``metadata.participants``.
+EV_QUORUM_CHANGED = "ag2.channel.quorum_changed"
 
 EV_EXPECTATION_VIOLATED = "ag2.expectation.violated"
 

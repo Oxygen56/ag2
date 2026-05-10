@@ -305,7 +305,7 @@ async def test_discussion_partial_reject_fails_channel() -> None:
     )
     carol.on_envelope(_make_rejecter(carol))
 
-    with pytest.raises(ProtocolError, match="rejected"):
+    with pytest.raises(ProtocolError, match="rejected|quorum_unreachable"):
         await alice.open(
             type=DISCUSSION_TYPE,
             target=[bob.agent_id, carol.agent_id],

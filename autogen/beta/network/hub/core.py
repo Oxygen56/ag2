@@ -57,6 +57,7 @@ from ..envelope import (
     EV_CHANNEL_INVITE_ACK,
     EV_CHANNEL_INVITE_REJECT,
     EV_CHANNEL_OPENED,
+    EV_QUORUM_CHANGED,
     EV_TEXT,
     Envelope,
 )
@@ -1209,13 +1210,42 @@ class Hub:
         channel.
 
         Persists to ``channels/{id}/removed.json`` so the bar survives
-        hub restart. Idempotent.
+        hub restart. Idempotent. Emits ``ag2.channel.quorum_changed``
+        when the affected channel is active so peers can react to the
+        reduced participant count.
         """
         bucket = self._removed_from_channel.setdefault(channel_id, set())
         if agent_id in bucket:
             return
         bucket.add(agent_id)
         await self._persist_channel_removed(channel_id)
+
+        metadata = self._channels.get(channel_id)
+        if metadata is None or metadata.state != ChannelState.ACTIVE:
+            return
+        invitees, _, _, _ = self._quorum_counts(metadata)
+        # ``required`` is the original threshold (or full set for V1
+        # all-or-nothing); ``remaining`` is the count of participants
+        # who haven't been removed.
+        required = (
+            metadata.required_acks
+            if metadata.required_acks is not None
+            else invitees
+        )
+        remaining = sum(
+            1
+            for p in metadata.participants
+            if p.agent_id != metadata.creator_id and p.agent_id not in bucket
+        )
+        envelope = Envelope(
+            channel_id=channel_id,
+            sender_id=metadata.creator_id,
+            audience=None,
+            event_type=EV_QUORUM_CHANGED,
+            event_data={"remaining": remaining, "required": required},
+        )
+        with contextlib.suppress(Exception):
+            await self.post_envelope(envelope)
 
     def is_removed(self, channel_id: str, agent_id: str) -> bool:
         return agent_id in self._removed_from_channel.get(channel_id, set())
@@ -1606,13 +1636,41 @@ class Hub:
 
     # ── Channel transition helpers ──────────────────────────────────────────
 
+    def _quorum_counts(self, metadata: ChannelMetadata) -> tuple[int, int, int, int]:
+        """Return ``(invitees, pending, rejects, acks)`` for the
+        handshake in ``metadata``. ``invitees`` counts non-creator
+        participants — the universe the quorum is computed over."""
+        invitees = sum(1 for p in metadata.participants if p.agent_id != metadata.creator_id)
+        pending = len(metadata.pending_acks)
+        rejects = len(metadata.rejected_by)
+        acks = invitees - pending - rejects
+        return invitees, pending, rejects, acks
+
+    def _required_acks(self, metadata: ChannelMetadata) -> int:
+        """Resolve effective quorum.
+
+        ``required_acks=None`` (V1 default) requires every invitee —
+        all-or-nothing semantics. Any positive integer is treated as
+        the N-of-M threshold; values greater than the invitee count
+        clamp down so an over-specified quorum still terminates.
+        """
+        invitees, *_ = self._quorum_counts(metadata)
+        if metadata.required_acks is None:
+            return invitees
+        return min(metadata.required_acks, invitees)
+
     async def _handle_invite_ack(self, envelope: Envelope, metadata: ChannelMetadata) -> None:
         if metadata.state != ChannelState.PENDING:
             return
         if envelope.sender_id in metadata.pending_acks:
             metadata.pending_acks.remove(envelope.sender_id)
             await self._persist_channel_metadata(metadata)
-        if not metadata.pending_acks and not metadata.rejected_by:
+        # Activate as soon as we have enough acks; remaining pending
+        # invitees can still ack later but quorum doesn't wait on them.
+        # ``required_acks=None`` (V1 default) reduces to all-or-nothing.
+        _, _, _, acks = self._quorum_counts(metadata)
+        required = self._required_acks(metadata)
+        if acks >= required:
             await self._activate_channel(metadata.channel_id)
 
     async def _handle_invite_reject(self, envelope: Envelope, metadata: ChannelMetadata) -> None:
@@ -1623,11 +1681,30 @@ class Hub:
         if envelope.sender_id not in metadata.rejected_by:
             metadata.rejected_by.append(envelope.sender_id)
         await self._persist_channel_metadata(metadata)
-        # All-or-nothing handshake: any reject fails the channel.
-        await self._transition_channel(metadata.channel_id, ChannelState.CLOSED, "invite_rejected")
-        waiter = self._channel_open_waiters.get(metadata.channel_id)
-        if waiter is not None and not waiter.done():
-            waiter.set_exception(ProtocolError(f"channel rejected by {envelope.sender_id}"))
+
+        # With N-of-M quorum, a reject only fails the channel if it
+        # makes the threshold unreachable. Otherwise keep waiting for
+        # the remaining pending invitees, and activate now if quorum
+        # has already been met.
+        _, pending, _, acks = self._quorum_counts(metadata)
+        required = self._required_acks(metadata)
+
+        if pending + acks < required:
+            await self._transition_channel(
+                metadata.channel_id, ChannelState.CLOSED, "quorum_unreachable"
+            )
+            waiter = self._channel_open_waiters.get(metadata.channel_id)
+            if waiter is not None and not waiter.done():
+                waiter.set_exception(
+                    ProtocolError(
+                        f"channel {metadata.channel_id!r} quorum_unreachable "
+                        f"(rejected by {envelope.sender_id})"
+                    )
+                )
+            return
+
+        if acks >= required:
+            await self._activate_channel(metadata.channel_id)
 
     async def _activate_channel(self, channel_id: str) -> None:
         metadata = self._channels.get(channel_id)
