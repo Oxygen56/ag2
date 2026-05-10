@@ -28,7 +28,7 @@ from .adapters import (
     WorkflowAdapter,
     WorkflowState,
 )
-from .auth import AuthAdapter, AuthRegistry, NoAuth
+from .auth import ApiKeyAuth, AuthAdapter, AuthRegistry, NoAuth
 from .channel import (
     ChannelManifest,
     ChannelMetadata,
@@ -220,6 +220,7 @@ __all__ = (
     "AgentRuntime",
     "AgentTarget",
     "Always",
+    "ApiKeyAuth",
     "AuditHandler",
     "AuditLog",
     "AuthAdapter",
