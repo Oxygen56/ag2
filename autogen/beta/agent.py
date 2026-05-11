@@ -71,7 +71,7 @@ from .observer import Observer
 from .observer import observer as observer_factory
 from .response import ResponseProto, ResponseSchema
 from .stream import MemoryStream, Stream
-from .task import Task, TaskSpec
+from .task import CheckpointStore, Task, TaskSpec
 from .tools.executor import ToolExecutor
 from .tools.final import FunctionParameters, FunctionTool, FunctionToolSchema, tool
 from .tools.schemas import ToolSchema
@@ -630,6 +630,9 @@ class Agent(Generic[TResult]):
         capability: str | None = None,
         ttl_seconds: int | None = None,
         context: Context | None = None,
+        task_id: str | None = None,
+        checkpoint_store: CheckpointStore | None = None,
+        resume_from: str | None = None,
     ) -> Task:
         """Create a ``Task`` whose lifecycle this Agent owns.
 
@@ -659,6 +662,9 @@ class Agent(Generic[TResult]):
             spec=spec,
             context=context,
             ttl_seconds=ttl_seconds,
+            task_id=task_id,
+            checkpoint_store=checkpoint_store,
+            resume_from=resume_from,
         )
 
     def tool(

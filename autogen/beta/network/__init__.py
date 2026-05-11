@@ -84,6 +84,7 @@ from .errors import (
     NetworkError,
     NotFoundError,
     ProtocolError,
+    RateLimited,
 )
 from .handoff import Handoff
 from .hub import (
@@ -188,6 +189,8 @@ from .transport import (
     decode_frame,
     encode_frame,
 )
+from .transport.http import make_http_app
+from .transport.ws import WsLink, WsLinkClient, WsLinkEndpoint, serve_ws
 from .views import FullTranscript, ViewPolicy, WindowedSummary
 
 __all__ = (
@@ -311,6 +314,7 @@ __all__ = (
     "ProgressWithinEvaluator",
     "ProtocolError",
     "RateBlock",
+    "RateLimited",
     "ReceiptFrame",
     "RemoveHandler",
     "ReplyWithinEvaluator",
@@ -344,12 +348,16 @@ __all__ = (
     "WorkflowAdapter",
     "WorkflowGraphError",
     "WorkflowState",
+    "WsLink",
+    "WsLinkClient",
+    "WsLinkEndpoint",
     "decode_frame",
     "default_evaluators",
     "default_handler",
     "default_handlers",
     "encode_frame",
     "from_classic_pattern",
+    "make_http_app",
     "make_id",
     "parse_duration",
     "parse_skill_frontmatter",
@@ -358,6 +366,7 @@ __all__ = (
     "register_target",
     "render_fallback_skill",
     "resolve_view_policy",
+    "serve_ws",
     "stamp_dependencies",
     "visible_to",
 )

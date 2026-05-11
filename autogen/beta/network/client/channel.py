@@ -103,20 +103,20 @@ class Channel:
         parent_envelope_id: str,
         text: str,
         *,
-        sequence: int,
+        sequence: int | None = None,
         audience: list[str] | None = None,
         is_final: bool = False,
-    ) -> None:
+    ) -> int:
         """Post a streaming chunk attached to a prior envelope.
 
         Chunks are ephemeral — not persisted to the WAL. ``audience``
-        defaults to the parent envelope's audience (which the hub
-        re-derives at fan-out). ``sequence`` is sender-monotonic per
-        ``parent_envelope_id`` so receivers can detect drops; the
-        sender owns assignment. ``is_final=True`` marks the terminal
-        chunk for the parent stream.
+        defaults to broadcast within the channel. ``sequence`` is
+        sender-monotonic per ``parent_envelope_id``; if not supplied,
+        the client auto-increments from a per-parent counter.
+        ``is_final=True`` marks the terminal chunk. Returns the
+        sequence number actually used.
         """
-        await self._client.send_chunk(
+        return await self._client.send_chunk(
             channel_id=self.channel_id,
             parent_envelope_id=parent_envelope_id,
             text=text,

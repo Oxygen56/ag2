@@ -26,6 +26,7 @@ includes ``NetworkContextPolicy``.
 """
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -103,8 +104,15 @@ class AgentClient:
         self._checkpoint_store: CheckpointStore | None = None
 
         # Per-(channel_id, parent_envelope_id) chunk subscription map.
-        # Populated by ``iter_chunks`` callers; cleared on terminal chunk.
-        self._chunk_subscriptions: dict[tuple[str, str], ChunkSubscription] = {}
+        # Multiple concurrent subscribers may listen on the same parent
+        # (e.g. two awaiting coroutines in the same agent); each gets
+        # an independent ``ChunkSubscription`` and the same delta is
+        # fanned out to every entry.
+        self._chunk_subscriptions: dict[tuple[str, str], list[ChunkSubscription]] = {}
+        # Sender-side monotonic sequence counter per
+        # (channel_id, parent_envelope_id) so callers don't have to
+        # track it. Cleared on the final chunk.
+        self._chunk_sequences: dict[tuple[str, str], int] = {}
 
         # Tenant-side per-envelope hook chains. Run in registration
         # order on send (outbound) and receive (inbound). A hook
@@ -159,6 +167,13 @@ class AgentClient:
         drops the envelope entirely (no inbox put, no handler
         invocation); the WAL still has the original because hooks run
         client-side after hub-side persistence.
+
+        After the handler returns cleanly (or the handler is
+        suppressed), an ``ack`` ``ReceiptFrame`` is sent back to the
+        hub so the per-(agent, channel) inbox cursor advances and a
+        wire reconnect won't replay this delivery. ``nack`` is sent if
+        the handler raised. Receipts are best-effort — failures are
+        swallowed.
         """
         for hook in self._receive_hooks:
             result = await hook(envelope)
@@ -167,10 +182,36 @@ class AgentClient:
             envelope = result
         inbox = self.ensure_channel_inbox(envelope.channel_id)
         await inbox.put(envelope)
-        if envelope.channel_id in self._handler_suppressed_channels:
-            return
-        if self._on_envelope is not None:
-            await self._on_envelope(envelope)
+        handler_status = "ack"
+        handler_reason = ""
+        if (
+            envelope.channel_id not in self._handler_suppressed_channels
+            and self._on_envelope is not None
+        ):
+            try:
+                await self._on_envelope(envelope)
+            except Exception as exc:
+                handler_status = "nack"
+                handler_reason = repr(exc)
+                # Re-raise so observers / pytest see the failure; receipt
+                # was already prepared before re-raise.
+                with contextlib.suppress(Exception):
+                    await self._hub_client._send_receipt(
+                        envelope_id=envelope.envelope_id,
+                        channel_id=envelope.channel_id,
+                        status=handler_status,
+                        reason=handler_reason,
+                    )
+                raise
+        # Only emit receipts for envelopes the hub has actually stamped.
+        if envelope.envelope_id:
+            with contextlib.suppress(Exception):
+                await self._hub_client._send_receipt(
+                    envelope_id=envelope.envelope_id,
+                    channel_id=envelope.channel_id,
+                    status=handler_status,
+                    reason=handler_reason,
+                )
 
     def on_envelope(self, callback: EnvelopeHandler) -> None:
         """Override the default notify handler with a custom callback.
@@ -368,18 +409,30 @@ class AgentClient:
         channel_id: str,
         parent_envelope_id: str,
         text: str,
-        sequence: int,
+        sequence: int | None = None,
         audience: list[str] | None = None,
         is_final: bool = False,
-    ) -> None:
+    ) -> int:
         """Post a streaming chunk attached to ``parent_envelope_id``.
 
         Chunks are ephemeral — not persisted to the WAL. The hub fans
         out per recipient using the same audience/access path as
-        ``NotifyFrame``.
+        ``NotifyFrame``. If ``sequence`` is not supplied, the client
+        auto-increments from a per-(channel, parent) counter so the
+        caller doesn't need to track it. Returns the assigned
+        sequence.
         """
         if self._disconnected:
             raise RuntimeError("AgentClient is disconnected")
+        if sequence is None:
+            key = (channel_id, parent_envelope_id)
+            next_seq = self._chunk_sequences.get(key, 0)
+            sequence = next_seq
+            self._chunk_sequences[key] = next_seq + 1
+            if is_final:
+                # Drop the counter so a future re-use of the parent id
+                # starts fresh.
+                self._chunk_sequences.pop(key, None)
         frame = ChunkFrame(
             channel_id=channel_id,
             parent_envelope_id=parent_envelope_id,
@@ -390,6 +443,7 @@ class AgentClient:
             is_final=is_final,
         )
         await self._hub_client.post_chunk(frame)
+        return sequence
 
     async def receive_chunk(
         self,
@@ -398,16 +452,16 @@ class AgentClient:
         channel_id: str,
         parent_envelope_id: str,
     ) -> None:
-        """Internal hook: route an inbound ``ChunkFrame`` to the
+        """Internal hook: route an inbound ``ChunkFrame`` to every
         matching subscription. Called by ``HubClient._dispatch_chunk``.
         """
-        sub = self._chunk_subscriptions.get((channel_id, parent_envelope_id))
-        if sub is None:
+        subs = self._chunk_subscriptions.get((channel_id, parent_envelope_id))
+        if not subs:
             return
-        await sub.put(delta)
-        # The subscription closes itself once ``is_final`` lands;
-        # drop our reference so the next ``iter_chunks`` for the same
-        # parent doesn't pick up a closed handle.
+        for sub in list(subs):
+            await sub.put(delta)
+        # Drop the subscription list once the terminal chunk lands so
+        # a future re-use of the parent id starts with fresh subscribers.
         if delta.is_final:
             self._chunk_subscriptions.pop((channel_id, parent_envelope_id), None)
 
@@ -419,16 +473,24 @@ class AgentClient:
         """Yield inbound chunks for ``(channel_id, parent_envelope_id)``.
 
         Yields until the terminal chunk lands or the caller breaks.
-        Multiple in-flight streams stay isolated by ``parent_envelope_id``.
+        Multiple in-flight streams stay isolated by ``parent_envelope_id``;
+        multiple concurrent subscribers per parent each get an
+        independent copy of every delta.
         """
         sub = ChunkSubscription()
-        self._chunk_subscriptions[(channel_id, parent_envelope_id)] = sub
+        key = (channel_id, parent_envelope_id)
+        self._chunk_subscriptions.setdefault(key, []).append(sub)
         try:
             async for delta in sub:
                 yield delta
         finally:
             await sub.close()
-            self._chunk_subscriptions.pop((channel_id, parent_envelope_id), None)
+            bucket = self._chunk_subscriptions.get(key)
+            if bucket is not None:
+                with contextlib.suppress(ValueError):
+                    bucket.remove(sub)
+                if not bucket:
+                    self._chunk_subscriptions.pop(key, None)
 
     # ── Tenant-driven mutation ───────────────────────────────────────────────
 
