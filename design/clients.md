@@ -56,14 +56,15 @@ class NetworkClient(Protocol):
 
     async def open(
         self,
+        *,
         type: str,
         target: str | list[str],
-        *,
         ttl: str | int | None = None,
         knobs: dict | None = None,
+        intent: str | None = None,
         labels: dict[str, str] | None = None,
     ) -> Channel:
-        """Open a session of `type` with `target`."""
+        """Open a channel of `type` with `target`."""
 
     async def disconnect(self) -> None: ...
 ```
@@ -84,9 +85,30 @@ A custom client implementation does not need to inherit from `AgentClient` or ve
 # autogen/beta/network/client/hub_client.py
 
 class HubClient:
-    def __init__(self, link: Link, *, hub: "Hub | None" = None) -> None:
-        """`hub` is the in-process Hub when using LocalLink; None for WsLink (Phase 3).
-        The client transparently uses direct method calls vs frames as appropriate."""
+    def __init__(
+        self,
+        link: LocalLink | LinkClient,
+        *,
+        hub: "Hub | None" = None,
+        adapters: list[ChannelAdapter] | None = None,
+    ) -> None:
+        """Construct a hub connection.
+
+        Pass a ``LocalLink`` and the matching in-process ``hub`` for the
+        fast path: register / discovery / mutation execute against the
+        hub directly. Pass any other ``LinkClient`` (e.g. ``WsLink``)
+        with ``hub=None`` to operate over a wire transport — every
+        control-plane call round-trips as ``RpcCallFrame`` / 
+        ``RpcResultFrame``, every data-plane send rides ``SendFrame`` /
+        ``AcceptFrame``, and inbound notifies travel as
+        ``NotifyFrame`` / ``ChunkFrame`` / ``ReceiptFrame``. The public
+        surface is identical either way; only the cost model differs.
+
+        ``adapters`` seeds the client-side adapter registry used in
+        wire mode to resolve ``adapter_for`` / ``default_view_policy``
+        without round-tripping (adapter code can't be serialised).
+        Defaults to the built-ins (``consulting``, ``conversation``,
+        ``discussion``, ``workflow``)."""
 
     async def register(
         self,
@@ -96,10 +118,23 @@ class HubClient:
         *,
         skill_md: str | None = None,
         rule: Rule | None = None,
+        attach_plugin: bool = True,
     ) -> AgentClient:
         """Stamp agent_id, persist passport + resume + optional SKILL.md + rule,
         attach NetworkPlugin to the Agent (so verbs become agent.tools), return
         the bound AgentClient."""
+
+    async def attach(
+        self,
+        agent: Agent,
+        *,
+        name: str,
+        attach_plugin: bool = True,
+    ) -> AgentClient:
+        """Reconnect ``agent`` to an existing identity by ``name``.
+        Binds this connection's endpoint to the existing ``agent_id``
+        and re-fires the default handler against any pending turns
+        the prior incarnation left behind."""
 
     async def list_agents(
         self, *,
@@ -112,9 +147,6 @@ class HubClient:
     async def get_agent(self, name_or_id: str) -> Passport: ...
     async def get_resume(self, agent_id: str) -> Resume: ...
     async def get_skill(self, agent_id: str) -> str | None: ...
-
-    async def describe_network(self) -> NetworkMetadata:
-        """Adapters available, peer count, my own state."""
 
     async def close(self) -> None:
         """Disconnect; existing AgentClients become no-ops on send."""

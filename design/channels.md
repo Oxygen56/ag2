@@ -30,7 +30,7 @@ class Expectation:
     """
 
     name: str                                  # see "Expectations" below
-    on_violation: str                          # "audit" | "warn" | "notify_session" | "hide" | "remove" | "auto_close"
+    on_violation: str                          # "audit" | "warn" | "notify_channel" | "hide" | "remove" | "auto_close"
     params: dict[str, Any] = field(default_factory=dict)
     applies_to: list[str] | None = None        # role names or agent ids; None = all participants
 
@@ -124,7 +124,7 @@ class ChannelAdapter(Protocol):
     manifest: ChannelManifest
 
     def initial_state(self, metadata: ChannelMetadata) -> AdapterState:
-        """Empty state for a fresh session."""
+        """Empty state for a fresh channel."""
 
     def fold(self, envelope: Envelope, state: AdapterState) -> AdapterState:
         """Append `envelope` into the derived state. Pure function.
@@ -160,7 +160,60 @@ class ChannelAdapter(Protocol):
         metadata: ChannelMetadata,
         participant_id: str,
     ) -> ViewPolicy:
-        """Per-participant default projection for this session type."""
+        """Per-participant default projection for this channel type."""
+
+    def extract_turn_input(self, envelope: Envelope) -> str | Input | list[Input] | None:
+        """Decode an inbound substantive envelope into the next
+        speaker's prompt. Return ``None`` (or empty) for envelopes the
+        adapter doesn't act on — the handler will skip the LLM round.
+
+        Default helper ``default_extract_turn_input`` covers ``EV_TEXT``.
+        Adapters with richer round shapes (e.g. ``WorkflowAdapter``
+        with ``EV_PACKET``) override to decode their additional types.
+        """
+
+    def build_round_envelope(
+        self,
+        metadata: ChannelMetadata,
+        sender_id: str,
+        reply: "AgentReply",
+        events: list[BaseEvent],
+        state: AdapterState,
+        hub: "Hub | HubClient",
+    ) -> Envelope | None:
+        """Build the envelope capturing one ``Agent.ask`` round.
+
+        Called by the handler after the LLM round completes. The
+        default helper ``default_build_round_envelope`` emits
+        ``EV_TEXT(reply.body)`` when non-empty, else ``None``.
+        ``WorkflowAdapter`` overrides to emit ``EV_PACKET`` packets
+        carrying routing + body + context updates atomically.
+
+        Returning ``None`` means "no envelope worth posting" — the
+        caller skips the post entirely.
+        """
+
+    def render_envelope(self, envelope: Envelope) -> str | None:
+        """Project ``envelope`` to its LLM-visible string for view
+        policies. Adapters that emit only ``EV_TEXT`` delegate to
+        ``default_render_envelope``; richer adapters render their own
+        substantive types and fall through to the default for the
+        universal cases.
+
+        Returning ``None`` skips the envelope in the projection.
+        """
+
+    # Optional: per-recipient routing narrowing. Adapters omit this
+    # member entirely to keep the broadcast default; ``WorkflowAdapter``
+    # implements it to send substantive envelopes only to the expected
+    # next speaker.
+    #
+    # def dispatch_audience(
+    #     self,
+    #     envelope: Envelope,
+    #     metadata: ChannelMetadata,
+    #     state: AdapterState,
+    # ) -> list[str] | None: ...
 ```
 
 Adapters are stateless and pure. Every decision derives from `(metadata, AdapterState)`. The hub caches the latest folded state per session in memory and reconstructs it from the WAL on `hydrate()`. **`validate_send` and `on_accepted` are O(1), not O(WAL)** — this is the load-bearing fix vs. the original design and is what lets a 1000-turn discussion stay fast.
@@ -190,7 +243,7 @@ All handlers are **passive** — the hub records, signals, hides, removes, or cl
 |---|---|
 | `audit` | Log `ag2.expectation.violated` to WAL only; no `notify` delivery |
 | `warn` | Emit `ag2.expectation.violated` envelope, audience = violator |
-| `notify_session` | Emit `ag2.expectation.violated` envelope, broadcast to session |
+| `notify_channel` | Emit `ag2.expectation.violated` envelope, broadcast to channel |
 | `hide` | Drop violator from future `notify` in this session; WAL still records their absence; sender can still post but recipients won't see |
 | `remove` | State transition: violator removed from `metadata.participants`; cannot send into this session anymore. Emits `ag2.participant.removed`. |
 | `auto_close` | Transition session to `CLOSING` with `close_reason="expectation_violated:{name}"` |

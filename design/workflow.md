@@ -70,7 +70,7 @@ class Transition:
 | `RevertToInitiatorTarget` | — | `state.creator_id` |
 | `TerminateTarget` | `reason: str = "after_work"` | `next_speaker=None`, populates `close_reason` |
 
-`LLMSelectorTarget` is Phase 2.0; `RandomTarget` and `NestedSessionTarget` are Phase 4 (on-demand). See [Deferred — by phase](#deferred--by-phase).
+`LLMSelectorTarget` (selector agent picks the next speaker via a `Handoff`-returning tool) is also shipped. `RandomTarget`, `NestedSessionTarget`, and `SubGraph` are deferred until callers need them — see [Deferred](#deferred).
 
 ### Built-in TransitionConditions (V1)
 
@@ -78,11 +78,13 @@ class Transition:
 |---|---|---|
 | `Always` | — | every accepted turn |
 | `FromSpeaker` | `agent_id: str` | the just-accepted envelope was sent by `agent_id` |
-| `ToolCalled` | `tool_name: str` | the just-accepted envelope is `event_type="ag2.handoff"` with `event_data["tool"]==tool_name` |
+| `ToolCalled` | `tool_name: str` | the just-accepted envelope is an `EV_PACKET` whose `event_data["routing"]["tool"]` matches `tool_name` |
+| `ContextEquals` | `key: str, value: Any` | `state.context_vars[key] == value` (missing keys compare as `None`) |
 
-`ContextExpr`, `TurnCountReached`, and richer condition kinds are Phase 2.
+Richer condition kinds (e.g. `TurnCountReached`, full expression
+evaluators) extend the open `Protocol` via the named registry.
 
-These five targets and three conditions are deliberately the minimum that covers the common patterns without forcing architectural decisions (async resolution, expression evaluators, child-session lifecycle) before they're needed. The `Protocol` is open and the named registry (see [Registries](#registries)) accepts new types in two lines.
+These targets and conditions are deliberately the minimum that covers the common patterns without forcing architectural decisions (async resolution, expression evaluators, child-session lifecycle) before they're needed. The `Protocol` is open and the named registry (see [Registries](#registries)) accepts new types in two lines.
 
 ## TransitionGraph
 
@@ -148,8 +150,11 @@ class WorkflowAdapter:
 
     def fold(self, envelope, state):
         # Channel-protocol and task envelopes don't advance turns.
-        # ag2.handoff and ag2.msg.text envelopes update last_speaker_id
-        # and turn_count; on_accepted then advances expected_next_speaker.
+        # EV_TEXT and EV_PACKET envelopes update last_speaker_id and
+        # turn_count; the fold then resolves the next transition (via
+        # the embedded ``routing.target`` for handoff packets, or via
+        # ``select_next`` for static rules) and advances
+        # ``expected_next_speaker``.
         ...
 
     def validate_send(self, metadata, envelope, state):
@@ -181,13 +186,11 @@ The adapter is stateless and pure. All state lives in `WorkflowState`, folded fr
 
 ## Dispatch
 
-`WorkflowAdapter` reuses the existing dispatch path with no hub changes:
+`WorkflowAdapter` rides the standard dispatch path with one per-recipient narrowing optimization:
 
-1. Sender posts envelope; hub `_dispatch` broadcasts `NotifyFrame` to all participants (hub/core.py:844).
-2. Each participant's notify handler calls `adapter.validate_send` for itself before engaging the LLM.
-3. Only the agent matching `state.expected_next_speaker` survives the gate; everyone else's handler is a no-op.
-
-Per-recipient routing (stamping `audience=[expected_next_speaker]` on outbound dispatch) is a Phase 3 optimization that adds a `dispatch_audience` hook to the `ChannelAdapter` Protocol. Not on the M4 critical path — broadcast cost is negligible at <20 participants.
+1. Sender posts envelope. The hub asks the adapter for an optional narrowed audience via the `ChannelAdapter.dispatch_audience` hook; for substantive `EV_TEXT` / `EV_PACKET` envelopes `WorkflowAdapter` returns `[state.expected_next_speaker]` so only the next speaker gets a `NotifyFrame`. Other participants observe the turn through their WAL projection on their next read.
+2. The recipient's notify handler still calls `adapter.validate_send` defensively; the narrowing skips wire round-trips, not the gate.
+3. Protocol envelopes (invites, opens, closes), envelopes with an explicit audience, and terminated workflows fall back to the default broadcast.
 
 ## LLM-driven handoffs
 
@@ -215,7 +218,7 @@ manager_agent.tools.extend(tools)
 await client.open(type="workflow", knobs={"graph": graph.dumps()})
 ```
 
-`OnContextCondition`-style handoffs (no LLM) become `Transition(when=ContextExpr(...), then=...)` once Phase 2.1 ships `ContextExpr`. The vocabulary is identical; only the evaluation strategy differs.
+No-LLM handoffs use `Transition(when=ContextEquals(key, value), then=...)` against the channel-scoped `state.context_vars` (mutated by `EV_CONTEXT_SET` envelopes and `EV_PACKET.event_data["context_updates"]`). A richer expression evaluator is open work — `ContextEquals` covers point-equality today, and custom conditions plug in via the registry.
 
 `EV_PACKET` is the durable record of each round and is documented in [envelope.md](envelope.md). The `Handoff` dataclass lives at `autogen.beta.network.handoff`.
 
@@ -277,7 +280,7 @@ WorkflowGraph(
     max_turns=20,
 )
 
-# Manager-as-initiator (auto-pattern equivalent — no LLMSelectorTarget needed in V1)
+# Manager-as-initiator (a hand-rolled equivalent of auto_pattern)
 WorkflowGraph(
     initial_speaker="manager",
     transitions=[
@@ -289,9 +292,9 @@ WorkflowGraph(
 )
 ```
 
-The manager-as-initiator recipe is how V1 expresses AG2-classic's `AutoPattern` without introducing `LLMSelectorTarget`'s async-resolution edge case. The manager agent is itself in the participant list, gets every off-turn back via `RevertToInitiatorTarget`, and uses `ToolCalled` handoffs to direct. This matches AutoPattern semantics one-for-one — the manager just happens to also be the initiator.
+The manager-as-initiator recipe expresses AG2-classic's `AutoPattern` by hand: the manager agent is in the participant list, gets every off-turn back via `RevertToInitiatorTarget`, and uses `ToolCalled` handoffs to direct. `TransitionGraph.auto_pattern(...)` builds the same shape declaratively and also materializes the `Handoff`-returning routing tools for the selector.
 
-A migration helper `WorkflowGraph.from_pattern(...)` that consumes a classic `Pattern` instance is Phase 2.
+For users moving off `autogen.agentchat.group.patterns`, `from_classic_pattern(pattern, *, selector_id=...)` translates `RoundRobinPattern` and `AutoPattern` instances into the equivalent `TransitionGraph` (other classic patterns raise `UnsupportedPatternError` until their primitive lands).
 
 ## Registries — extending the vocabulary
 
@@ -309,26 +312,20 @@ class WhenTurnCount:
 register_condition(WhenTurnCount)
 ```
 
-Custom classes serialize the same way V1 ones do, as long as they're `@dataclass(slots=True)` with JSON-friendly fields. The registry is process-local; cross-process usage (Phase 3) requires both ends to register the same name.
+Custom classes serialize the same way built-ins do, as long as they're `@dataclass(slots=True)` with JSON-friendly fields. The registry is process-local; cross-process callers must register the same name on both ends — there's no automatic class shipping.
 
-## Deferred — by phase
+## Deferred
 
-Kept out of M4 to keep the core surface tight. The Protocol design accommodates each without architectural disruption.
+Kept off the core surface. The Protocol design accommodates each without architectural disruption.
 
-### Phase 2.0
-- `LLMSelectorTarget` — selector agent picks the next speaker. Requires the hub to resolve a target asynchronously (open a sub-consulting session, await reply, parse the pick). The AG2-classic `AutoPattern` equivalent.
-- Migration helper: classic `Pattern` → `WorkflowGraph`. Drop-in adoption path for users moving off `GroupChat` + `Handoffs` + `AfterWork`.
-
-### Phase 2.1
-- `ContextExpr` and `TurnCountReached` — pure-Python no-LLM conditions. Need a shared expression evaluator (not duplicated from `rules.py`).
+### Compositional conditions
+- Full `ContextExpr` evaluator — pure-Python no-LLM expressions over `state.context_vars`. `ContextEquals` covers the simple-equality case today; a richer evaluator ships when callers need it (the open registry accepts custom conditions in two lines).
+- `TurnCountReached` — pure-Python no-LLM condition over `state.turn_count`.
 - `OnFailure` transitions — saga choreography composed from existing `Transition` vocabulary. Saga skeleton lives in `examples/saga.py`.
 
-### Phase 3
-- `dispatch_audience` hook on `ChannelAdapter` — per-recipient routing optimization that earns its keep when network round-trips are real.
-
-### Phase 4 (on-demand)
-- `RandomTarget` — random speaker pick.
-- `NestedSessionTarget` — opens a child session under `parent_session_id`. The Network's `SocietyOfMind` story. Needs close-cascade tweaks.
+### Targets that need new framework primitives
+- `RandomTarget` — random speaker pick. Needs a clock-independent RNG abstraction so `Hub.hydrate()` stays deterministic.
+- `NestedSessionTarget` — opens a child channel under `parent_channel_id`. Needs close-cascade tweaks.
 - `SubGraph` target — composing one workflow into another.
 
 ### Cut
@@ -336,8 +333,9 @@ Kept out of M4 to keep the core surface tight. The Protocol design accommodates 
 
 ## Invariants
 
-- A workflow session is referenced by exactly one `TransitionGraph` for its lifetime; the graph is snapshotted into `metadata.knobs["graph"]` at create time and never mutates.
+- A workflow channel is referenced by exactly one `TransitionGraph` for its lifetime; the graph is snapshotted into `metadata.knobs["graph"]` at create time and never mutates.
 - `WorkflowState.expected_next_speaker` is always a current participant or `None`. Removing a participant (via `Expectation`'s `remove` handler) falls through to `default_target` on the next turn.
-- `TransitionTarget.resolve` and `TransitionCondition.evaluate` are pure functions of `(metadata, state, envelope)`. Side-effecting implementations are forbidden — they break `Hub.hydrate()`.
-- `AdapterState.expected_next_speaker` advances exactly once per accepted non-protocol envelope.
-- `max_turns` counts substantive envelopes (`ag2.msg.text` and `ag2.handoff`); session-protocol and task envelopes don't increment.
+- `TransitionTarget.resolve` and `TransitionCondition.evaluate` are pure functions of `(state, envelope)`. Side-effecting implementations are forbidden — they break `Hub.hydrate()`.
+- `WorkflowState.expected_next_speaker` advances exactly once per accepted substantive envelope (`EV_TEXT` or `EV_PACKET`).
+- `max_turns` counts substantive envelopes (`EV_TEXT` and `EV_PACKET`); channel-protocol and task envelopes don't increment.
+- A silent round — empty body, no routing — still posts an empty `EV_PACKET` so the speaker rotates and the workflow makes progress against `max_turns` / `turn_within`. The receiver may skip their LLM turn on an empty payload; subsequent rotations either find someone with something to say or the channel terminates.

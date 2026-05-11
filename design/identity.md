@@ -193,9 +193,9 @@ The LLM does **not** mutate its own resume. Resume mutation is a tenant decision
 
 `await agent_client.unregister()` — closes the link, removes registry entries, deletes the inbox cursor, fans out an `agent.unregistered` event to active subscribers. Does not delete WAL of past sessions; closed sessions remain on disk. The unregistration is recorded in the hub's audit log (see [persistence.md](persistence.md)).
 
-## Auth (V1 surface)
+## Auth
 
-V1 ships `NoAuth` only. `ApiKeyAuth` lands in Phase 3 alongside the WebSocket transport. The Protocol stays open so further schemes ship additively.
+The framework ships `NoAuth` (the default) and `ApiKeyAuth`. The Protocol stays open so further schemes ship additively.
 
 ```python
 # autogen/beta/network/auth.py
@@ -213,14 +213,42 @@ class NoAuth:
 class AuthRegistry:
     def __init__(self, adapters: list[AuthAdapter]) -> None: ...
     def get(self, scheme: str) -> AuthAdapter: ...
-
-default_registry = AuthRegistry([NoAuth()])
+    @classmethod
+    def default(cls) -> "AuthRegistry": ...     # NoAuth only
 ```
 
-## Phase 3 additions
+### `ApiKeyAuth`
 
-- `ApiKeyAuth` — validates `claim['api_key']` against `passport.auth.key_fingerprint` with a constant-time SHA-256 compare.
-- `dev_registry = AuthRegistry([NoAuth(), ApiKeyAuth()])` — dev convenience that accepts both.
-- Auth runs at the WS `hello` frame and at the HTTP front door.
+Shared-secret API-key adapter. Constructed with either a static
+`keys: Mapping[str, str]` mapping `name → key` or a `resolver:
+Callable[[str], str | None]` for dynamic lookup. Claims look like
+`{"key": "<secret>"}`. Comparison uses `hmac.compare_digest` on the
+raw key bytes, so a request whose key is a prefix of the expected
+value still fails. Unknown identities fail closed.
 
-JWT, mTLS, and signed-challenge schemes are post Phase 4 — they're managed-deployment concerns beyond the framework-core surface.
+```python
+auth = AuthRegistry([NoAuth(), ApiKeyAuth(keys={"alice": "s3cret"})])
+hub = await Hub.open(store, auth=auth)
+```
+
+The hub honours the scheme declared on each passport's `AuthBlock`,
+so a registry that mixes `NoAuth` with `ApiKeyAuth` does not become
+a backdoor for `ApiKeyAuth`-tagged identities — they must still
+present a valid key.
+
+Plaintext keys live in the registry; the framework does not store or
+compare fingerprints. Apps that need hash-only storage should wrap
+`resolver=` with a hash-checking shim or plug in a custom adapter.
+
+`ApiKeyAuth` runs at:
+
+* `HubClient.register` — invoked synchronously on the in-process hub.
+* The WS `HelloFrame` handshake — when the hub is reached via
+  `serve_ws`.
+* The HTTP front door — `_AuthMiddleware` reads `X-Agent-Name` and
+  `X-Api-Key` headers and dispatches to the adapter matching the
+  passport's declared scheme.
+
+JWT, mTLS, and signed-challenge schemes are out of scope for the
+framework core — they belong to managed deployments and plug in via
+the same `AuthAdapter` Protocol.

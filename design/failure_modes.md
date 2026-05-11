@@ -101,7 +101,7 @@ This doc is the contract: what failure modes exist, what the framework does abou
 
 **Symptom**: Some declared expectation (`min_participation`, `max_silence`, etc.) fires.
 
-**Framework**: hub applies the declared `on_violation` handler (`audit` | `warn` | `notify_session` | `hide` | `remove` | `auto_close`). All handlers are passive — hub records, signals, or removes; never substitutes content.
+**Framework**: hub applies the declared `on_violation` handler (`audit` | `warn` | `notify_channel` | `hide` | `remove` | `auto_close`). All handlers are passive — hub records, signals, or removes; never substitutes content.
 
 **Agent**: react to the `ag2.expectation.violated` envelope according to choreography.
 

@@ -22,10 +22,14 @@ class TaskState(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 TERMINAL_TASK_STATES = frozenset({
-    TaskState.COMPLETED, TaskState.FAILED, TaskState.EXPIRED,
+    TaskState.COMPLETED,
+    TaskState.FAILED,
+    TaskState.EXPIRED,
+    TaskState.CANCELLED,
 })
 
 
@@ -34,6 +38,9 @@ class TaskSpec:
     title: str
     description: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
+    capability: str | None = None       # tags terminal events so the
+                                        # network's TaskMirror updates
+                                        # Resume.observed[capability]
 
 
 @dataclass(slots=True)
@@ -272,11 +279,37 @@ One LLM verb on the surface; both paths produce identical observable Task events
 | run_subtask and Task are unrelated | run_subtask wraps in Task; same lifecycle, same observer surface |
 | Network has parallel notion of "delegated task" | Network is one observer; same primitive, more witnesses |
 
-## Phase 2.0 additions
+## Checkpoint + restart
 
-- `Task.checkpoint(state: dict)` — opt-in primitive for restart-recoverable work. Persists JSON to `tasks/{task_id}/checkpoint.json`. Owner chooses what to checkpoint; `agent.task(resume_from=task_id)` reads it on construction. The framework provides storage but never inspects the contents.
-- `TaskState.CANCELLED` + `task.cancel(reason)` (owner-driven) + `EV_TASK_CANCELLED`.
-- `ag2.task.cancel_request` envelope: peer asks owner to stop; owner free to honour or ignore.
-- `tasks(action="cancel", task_id, reason?)` LLM verb wires up the request envelope.
+`Task.checkpoint(state: dict)` is an opt-in primitive for
+restart-recoverable work. A user-supplied `CheckpointStore` (the
+network ships `HubBackedCheckpointStore` writing under
+`tasks/{task_id}/checkpoint.json`) persists JSON; the owner chooses
+what to checkpoint and when. `agent.task(resume_from=task_id,
+checkpoint_store=...)` reads the prior state on construction and
+exposes it via `task.resumed_state` so the owner can pick up
+mid-flow. The framework provides storage but never inspects the
+contents — checkpoint payloads are opaque to it.
 
-Saga-style multi-step tasks compose from `Task.checkpoint` + the Phase 2.1 `OnFailure` workflow transitions. `TaskPhase` from the original draft is replaced by user code carrying its own phase markers inside the checkpoint dict — there's no need for a separate phase concept on the framework. The skeleton lives in `examples/saga.py`.
+`AgentClient.checkpoint_store` is the lazily-constructed default for
+network agents; standalone agents may supply any store satisfying the
+`CheckpointStore` Protocol (or omit and skip checkpointing entirely).
+
+## Cancellation
+
+`TaskState.CANCELLED` is terminal alongside `COMPLETED`, `FAILED`,
+and `EXPIRED`. The framework distinguishes:
+
+* **Owner-driven** — `Task.cancel(reason)` deliberately ends a task
+  the owner is running. Emits `TaskCancelled` on the owner's stream;
+  the network mirror forwards as `EV_TASK_CANCELLED`.
+* **Peer-requested** — `ag2.task.cancel_request` envelope carries
+  `{task_id, reason}`. The owner is free to honour or ignore: their
+  notify handler reads the request and decides. The LLM-facing
+  `tasks(action="cancel", task_id, reason?)` verb is the posting
+  side.
+
+Saga-style multi-step tasks compose from `Task.checkpoint` plus
+workflow transitions. Phase markers live inside the checkpoint dict
+chosen by the owner — there is no framework-level phase concept. The
+skeleton lives in `examples/saga.py`.
