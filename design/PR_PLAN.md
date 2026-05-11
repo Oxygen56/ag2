@@ -1,6 +1,6 @@
 # AG2 Network — PR Publication Plan
 
-This document describes how the `network-design` work is published to `main`. Phase 1 shipped as three stacked pull requests (PR1–PR3). Stabilization for the v1.X minor-version release ships as four follow-up stacked PRs (PR4–PR7) detailed in [Post-PR3](#post-pr3--stabilization-for-the-v1x-minor-version-release). Phase 2 / Phase 3 publication is deferred and re-planned after stabilization lands.
+This document describes how the `network-design` work is published to `main`. Phase 1 shipped as three stacked pull requests (PR1–PR3). Stabilization for the v1.X minor-version release ships as two follow-up stacked PRs (PR4–PR5) detailed in [Post-PR3](#post-pr3--stabilization-for-the-v1x-minor-version-release). Phase 2 / Phase 3 publication is deferred and re-planned after stabilization lands.
 
 Source of truth for the design itself is [PLAN.md](PLAN.md). This file only covers **how the work ships**.
 
@@ -11,10 +11,8 @@ Source of truth for the design itself is [PLAN.md](PLAN.md). This file only cove
 | PR1 | [#2774](https://github.com/ag2ai/ag2/pull/2774) | `feat/network-pr1-task` | `feat(beta): add Task lifecycle primitive` | ✅ merged |
 | PR2 | [#2775](https://github.com/ag2ai/ag2/pull/2775) | `feat/network-pr2-protocol` | `feat(beta/network): protocol, state, and control plane` | ✅ merged |
 | PR3 | [#2776](https://github.com/ag2ai/ag2/pull/2776) | `feat/network-pr3-tools` | `feat(beta/network): LLM tool surface and workflow` | ✅ merged (`5c2247ebb77`) |
-| PR4 | _tbd_ | `feat/network-pr4-human-client` | `feat(beta/network): HumanClient + Passport.kind` | 🟡 in progress |
-| PR5 | _tbd_ | `feat/network-pr5-observability` | `feat(beta/network): HubListener, HubArbiter, observability` | 📋 planned |
-| PR6 | _tbd_ | `feat/network-pr6-adapter-tools` | `feat(beta/network): adapter-owned tool surface` | 📋 planned |
-| PR7 | _tbd_ | `feat/network-pr7-subclass-surface` | `feat(beta/network): Hub subclass surface + latent fixes` | 📋 planned |
+| PR4 | _tbd_ | `feat/network-pr4-foundation` | `feat(beta/network): HumanClient + observability foundation` | 🟡 in progress |
+| PR5 | _tbd_ | `feat/network-pr5-adapter-tools-and-subclass` | `feat(beta/network): adapter-owned tools + subclass surface` | 📋 planned |
 
 ## Strategy
 
@@ -219,61 +217,63 @@ Phase 1 shipped the protocol, state machine, control plane, LLM tool surface, an
 
 ### PR split
 
-Stabilization ships as four stacked PRs. Each is independently mergeable. Branching: `PR4 ← main`, `PR5 ← PR4`, `PR6 ← PR5`, `PR7 ← PR6`.
+Stabilization ships as two stacked PRs. Each is independently mergeable. Branching: `PR4 ← main`, `PR5 ← PR4`.
 
 | PR | Theme | Stacks on | Approx LOC |
 |----|-------|-----------|-----------:|
-| PR4 | HumanClient + `Passport.kind` | `main` (post-PR3) | ~600 source / ~400 test |
-| PR5 | HubListener + HubArbiter + observability + handler trap + logging + `Hub.health()` | PR4 | ~1.2K source / ~600 test |
-| PR6 | Adapter-owned tools + Layer-2 envelope helpers | PR5 | ~1.0K source / ~800 test |
-| PR7 | Hub subclass surface + latent bug fixes | PR6 | ~500 source / ~400 test |
+| PR4 | HumanClient + `Passport.kind` + observability foundation (`HubListener` + `HubArbiter` + handler exception trap + hub logging + `Hub.health()`) | `main` (post-PR3) | ~1.8K source / ~1.0K test |
+| PR5 | Adapter-owned tools + Layer-2 envelope helpers + Hub subclass surface + latent bug fixes | PR4 | ~1.5K source / ~1.2K test |
 
-#### PR4 — HumanClient + `Passport.kind`
+The bundling reflects the dependency picture: PR5's `TaskMirror` error escalation, inbox-pressure surfacing, and adapter-tool resolution all want a working `HubListener` Protocol to publish through. Folding the observability layer into PR4 means PR5 can land cleanly on top without protocol-layer cross-PR coordination.
 
-**Goal:** non-LLM participants register and participate using the same network primitives as `AgentClient`. Embedders (CLIs, web apps, WebSocket bridges) wire their UI to a `HumanClient` and surface envelopes through push (callback) or pull (`next_envelope` / `envelopes` async iterator).
+#### PR4 — HITL + observability foundation
+
+**Goal:** non-LLM participants register and participate as first-class citizens, and every hub state transition becomes observable. Operators can subscribe to envelopes / channel events / agent events / expectation fires / dispatch failures / handler crashes / task events; the inline access-control logic becomes a swappable `HubArbiter` so federation / JWT / custom permission protocols slot in later without forking the hub.
 
 **Files:**
 
-- New: `autogen/beta/network/client/human_client.py` — `HumanClient` class. Implements `NetworkClient`; exposes `send`, `open`, `close_channel`, `post_envelope`, `on_envelope(callback)`, `next_envelope(predicate=, timeout=)`, `envelopes()` (async iterator), `disconnect`. No `Agent`, no `NetworkPlugin`, no `NetworkContextPolicy`. `open()` returns the same `Channel` handle `AgentClient.open()` returns.
-- Modified: `autogen/beta/network/identity.py` — add `Passport.kind: Literal["agent", "human", "remote_agent"] | None = None`. `None` means "agent" for back-compat; `"remote_agent"` is reserved (no implementation yet, just the value).
-- Modified: `autogen/beta/network/client/hub_client.py` — add `register_human(passport, *, resume=None, rule=None) -> HumanClient`. `register()` passes `passport.kind` through to hub persistence; rejects `kind="human"` with a guidance error pointing at `register_human`.
-- Modified: `autogen/beta/network/hub/core.py` — persist `passport.kind` on register; `agents_with_capability` / `list_agents` accept an optional `kind` filter so tools can scope discovery when needed.
+*HumanClient + Passport.kind:*
+
+- New: `autogen/beta/network/client/human_client.py` — `HumanClient` class. Implements `NetworkClient`; exposes `send`, `open`, `close_channel`, `post_envelope`, `on_envelope(callback)`, `next_envelope(predicate=, timeout=)`, `envelopes()` (async iterator), `disconnect`. No `Agent`, no `NetworkPlugin`, no `NetworkContextPolicy`. `open()` returns the same `Channel` handle `AgentClient.open()` returns. Auto-acks channel invites by default so adapter-driven handshakes complete without UI round-trips.
+- Modified: `autogen/beta/network/identity.py` — add `Passport.kind: Literal["agent", "human", "remote_agent"] | None = None`. `None` ≡ `"agent"` for back-compat; `"remote_agent"` is reserved (no implementation yet, just the value).
+- Modified: `autogen/beta/network/client/hub_client.py` — add `register_human(passport, *, resume=None, rule=None, auto_ack_invites=True) -> HumanClient`. `register()` rejects `kind="human"` with a guidance error pointing at `register_human`.
+- Modified: `autogen/beta/network/hub/core.py` — `list_agents` accepts an optional `kind` filter so discovery tools can scope by participant type.
 - Modified: `autogen/beta/network/__init__.py` + `autogen/beta/network/client/__init__.py` — re-export `HumanClient`.
-- Tests: `test/beta/network/test_human_client.py` — register, send `EV_TEXT`, receive via push callback + pull iterator, participate in `consulting` as the respondent, participate in `discussion` round-robin, seed a workflow.
-- Smokes: re-enable `test/beta/providers/anthropic/test_workflow_smoke.py` (today's `agent.ask` fake replaced by `HumanClient.send`); add a `HumanClient` participant to the 5-way `test_network_smoke.py` round-robin.
 
-**Exit criteria:**
-- Anthropic workflow smoke passes via `HumanClient` seeding the initial turn.
-- An `AgentClient` opens consulting against a `HumanClient`; the agent blocks until the human's reply is sent.
-- Round-robin `discussion` with a `HumanClient` participant rotates correctly through human turns.
-
-#### PR5 — Observability + HubArbiter
-
-**Goal:** make hub state transitions and decision points first-class so operators can subscribe, exceptions don't disappear, and the inline access logic becomes a swappable seam.
-
-**Files:**
+*Observability + decision-making seam:*
 
 - New: `autogen/beta/network/hub/listener.py` — `HubListener` Protocol with methods `on_envelope_posted`, `on_envelope_rejected`, `on_dispatch_failed`, `on_channel_event`, `on_agent_event`, `on_expectation_fired`, `on_turn_failed`, `on_task_event`, `on_inbox_pressure`. All methods are async with a default `pass` so subclasses only override what they need.
-- New: `autogen/beta/network/hub/arbiter.py` — `HubArbiter` Protocol (`authorize_send`, `authorize_register`, `authorize_channel_open`, `resolve_unknown_audience`) with `Decision`/`Allow`/`Deny` return type. `RuleBasedArbiter` default impl lifts the existing inline checks (per-agent `Rule.access`/`Rule.limits`, delegation depth, inbox cap).
+- New: `autogen/beta/network/hub/arbiter.py` — `HubArbiter` Protocol (`authorize_send`, `authorize_register`, `authorize_channel_open`, `resolve_unknown_audience`) with `Decision` / `Allow` / `Deny` return type. `RuleBasedArbiter` default impl lifts the existing inline checks (per-agent `Rule.access` / `Rule.limits`, delegation depth, inbox cap).
 - Modified: `autogen/beta/network/hub/core.py`:
-  - `Hub.register_listener(listener) -> None`, `Hub.register_arbiter(arbiter) -> None`.
+  - `Hub.register_listener(listener)` / `unregister_listener(listener)` / `Hub.register_arbiter(arbiter)`.
   - Inline access logic in `post_envelope` delegates to `self._arbiter.authorize_send(...)`.
-  - Listener fan-out at every state transition (per-listener try/except around each call so one buggy listener doesn't break dispatch).
+  - Listener fan-out at every state transition (per-listener try/except so one buggy listener doesn't break dispatch).
   - `Hub.health() -> dict` — `{active_channels, registered_agents, pending_inbox_total, audit_log_bytes, oldest_pending_envelope_age_s}`.
-  - `logger = logging.getLogger(__name__)` wired at INFO (state changes), DEBUG (envelope flow), WARNING (rejections), ERROR (unexpected).
+  - `logger = logging.getLogger(__name__)` wired: INFO (state changes), DEBUG (envelope flow), WARNING (rejections), ERROR (unexpected).
 - Modified: `autogen/beta/network/hub/audit.py` — `AuditLog` becomes a `HubListener` implementation. Default hub installs it automatically. `AuditLog.subscribe(callback)` lets callers tail audit events live without polling the file.
-- Modified: `autogen/beta/network/client/handlers.py` — wrap `agent.ask` in `_process_substantive` with `try/except`. On exception: emit `on_turn_failed` listener event, write audit entry, do not crash the receive loop. Same for `build_round_envelope` failures.
-- Tests: `test/beta/network/test_listener.py`, `test/beta/network/test_arbiter.py`, `test/beta/network/test_handler_exception_trap.py`, `test/beta/network/test_health.py`.
+- Modified: `autogen/beta/network/client/handlers.py` — wrap `agent.ask` and `build_round_envelope` in `_process_substantive` with `try/except`. On exception: emit `on_turn_failed` listener event, write audit entry, do not crash the receive loop.
+
+*Tests + smokes:*
+
+- New: `test/beta/network/test_human_client.py` — register, push + pull surfaces, consulting (human as respondent + as initiator), discussion with a human participant, kind-filter on `list_agents`, post-disconnect raise, callback exception isolation, chunk no-op.
+- New: `test/beta/network/test_listener.py` — listener fan-out across all event kinds; faulty listener does not break dispatch.
+- New: `test/beta/network/test_arbiter.py` — `RuleBasedArbiter` matches the prior inline behavior; a swappable arbiter can deny / route differently.
+- New: `test/beta/network/test_handler_exception_trap.py` — `agent.ask` raising produces an audit + listener event; channel stays alive; subsequent envelopes flow.
+- New: `test/beta/network/test_health.py` — `Hub.health()` returns sensible counters on a populated hub.
+- Modified: `test/beta/providers/anthropic/test_workflow_smoke.py` — `HumanClient` seeds the initial turn (replaces the `agent.ask` shortcut that bypassed the network).
 
 **Exit criteria:**
-- Default `audit.jsonl` content is byte-identical to today's for the same input sequence (`AuditLog`-as-listener is a refactor, not a behavior change).
-- Registering a custom `HubListener` receives every documented event on a small end-to-end run.
-- A handler raising `RuntimeError` produces an audit entry + `on_turn_failed` event, the channel does not crash, subsequent envelopes flow normally.
+
+- Anthropic workflow smoke passes via `HumanClient` seeding the initial turn.
+- An `AgentClient` opens consulting against a `HumanClient`; the agent blocks until the human's reply.
+- Default `audit.jsonl` content is byte-identical to the prior baseline for the same input sequence (`AuditLog`-as-listener is a refactor, not behavior change).
+- A registered `HubListener` receives every documented event on a small end-to-end run; a faulty listener does not break dispatch.
+- A handler raising `RuntimeError` produces an audit entry + `on_turn_failed` event; the channel does not crash; the next envelope flows.
 - `Hub.health()` returns sensible values on a 3-channel / 5-agent hub.
 
-#### PR6 — Adapter-owned tools + envelope helpers
+#### PR5 — Adapter-owned tools + subclass surface + latent fixes
 
-**Goal:** resolve the structural `say`-in-workflow conflict by making each `ChannelAdapter` the source of truth for which LLM tools its protocol accepts. Layer-2 envelope helpers let non-AG2 clients construct correctly-shaped envelopes without going through the AG2 tool decorator system.
+**Goal:** resolve the structural `say`-in-workflow conflict by making each `ChannelAdapter` the source of truth for which LLM tools its protocol accepts. Layer-2 envelope helpers let non-AG2 clients construct correctly-shaped envelopes without going through the AG2 tool decorator. Hub becomes subclassable without monkey-patching, and three latent bugs (TaskMirror silent failure, unbounded causation index, missing inbox-pressure signal) close out.
 
 Three layers, only the third is AG2-LLM-specific:
 
@@ -286,55 +286,62 @@ Layer 3: LLM-tool wrappers  — JSON-schema callables (AG2-specific; presentatio
 
 **Files:**
 
+*Adapter-owned tools + envelope helpers:*
+
 - Modified: `autogen/beta/network/adapters/base.py`:
   - Add `tools_for(client, channel_id, participant_id) -> list[Tool]` to `ChannelAdapter` Protocol with a `default_tools_for` returning `[]`.
   - Add Layer-2 envelope helpers: `build_text_envelope(channel_id, sender_id, text, *, audience=None, causation_id=None) -> Envelope`, `build_packet_envelope(channel_id, sender_id, body, *, handoff=None, context_set=None, audience=None, causation_id=None) -> Envelope`. Defaults provided as module-level helpers so adapters that don't customize can re-export.
-- Modified: `autogen/beta/network/adapters/consulting.py`, `conversation.py`, `discussion.py` — return `[make_say_tool(client)]` from `tools_for` (for consulting, gated by adapter state so only the initiator sees `say` on the first turn).
+- Modified: `autogen/beta/network/adapters/consulting.py`, `conversation.py`, `discussion.py` — return `[make_say_tool(client)]` from `tools_for` (for consulting / discussion, gated by adapter state so only the participant whose turn it is sees `say`).
 - Modified: `autogen/beta/network/adapters/workflow.py` — `tools_for` returns `[]`. Handoff tools stay user-authored (the `Handoff`-returning `@tool` pattern is unchanged).
 - Modified: `autogen/beta/network/client/plugin.py`:
-  - `NetworkPlugin` attaches only `peers`/`channels`/`tasks`/`context` (cross-cutting identity-level tools).
+  - `NetworkPlugin` attaches only `peers` / `channels` / `tasks` / `context` / `delegate` (identity-level tools). `say` moves into the adapter-provided set.
   - `NetworkContextPolicy` stops hardcoding the tool list; renders dynamic identity + active-channel info only.
 - Modified: `autogen/beta/network/client/handlers.py` — `_process_substantive` resolves `adapter.tools_for(client, channel_id, participant_id)` and merges into the per-call tool override passed to `agent.ask`.
 - Modified: `autogen/beta/network/client/tools/channels.py` — `channels(action="open", ...)` accepts `message: str | None = None`. When set, hub posts the seed envelope on the initiator's behalf after the channel transitions to `OPENED`.
-- Modified: `autogen/beta/network/client/tools/say.py` — `make_say_tool` now consults the adapter via `adapter.build_text_envelope` so the tool produces an adapter-shaped envelope regardless of channel type (still rejects on type mismatch but the rejection is informative).
-- Tests: `test/beta/network/test_tool_layering.py`, `test/beta/network/test_envelope_helpers.py`. Existing per-adapter tests adjusted to reflect the new tool resolution.
+- Modified: `autogen/beta/network/client/tools/say.py` — `make_say_tool` consults the adapter via `adapter.build_text_envelope` so the tool produces an adapter-shaped envelope regardless of channel type.
+
+*Hub subclass surface:*
+
+- Modified: `autogen/beta/network/hub/core.py`:
+  - Empty `async def on_envelope_posted(envelope, metadata)` and siblings (`on_channel_opened`, `on_channel_closed`, `on_agent_registered`, `on_agent_unregistered`, `on_task_event`, `on_expectation_fired`) — Hub fires after the corresponding `HubListener` event; subclasses override directly without registering themselves.
+  - `Hub.register_sweeper(name, interval_seconds, callable)` extends the existing `_IntervalSweeper` mechanism. `unregister_sweeper(name)` for symmetry.
+- Modified: `autogen/beta/network/hub/audit.py` — document that audit kinds are an open set; subclasses append their own without modifying built-in constants.
+
+*Latent bug fixes:*
+
+- Modified: `autogen/beta/network/hub/core.py`:
+  - Prune `_causation_index[channel_id]` on terminal transition (`_transition_channel`) and `mark_removed`. Memory growth fix on long-lived channels.
+  - Fire `on_inbox_pressure(agent_id, pending_count)` when the count crosses a configurable high-water mark (`LimitsBlock.inbox.high_water` — defaults to 80% of cap, `None` disables). Routes through the `HubListener` introduced in PR4.
+- Modified: `autogen/beta/network/task_mirror.py` — replace the swallow-everything `except Exception` in the hub-observation path with: log at ERROR, fire `on_task_event(task_id, "mirror_failed", payload)` through the hub's listeners. The mirror still never crashes the agent's turn (best-effort) but failures are no longer invisible.
+
+*Tests:*
+
+- New: `test/beta/network/test_tool_layering.py` — workflow agents do not see `say`; consulting / conversation / discussion agents do; bridge calling `adapter.build_packet_envelope` directly drives a workflow turn end-to-end.
+- New: `test/beta/network/test_envelope_helpers.py` — Layer-2 helpers produce envelopes that round-trip through `Hub.post_envelope` for every adapter.
+- New: `test/beta/network/test_subclass_surface.py` — `class MyHub(Hub)` overriding `on_envelope_posted` sees every envelope; custom sweeper runs.
+- New: `test/beta/network/test_task_mirror_errors.py` — mirror failure produces `mirror_failed` task event; agent turn unaffected.
+- New: `test/beta/network/test_causation_pruning.py` — causation index size for a closed channel returns to 0 after `_transition_channel`.
+- New: `test/beta/network/test_inbox_pressure.py` — crossing the high-water mark fires `on_inbox_pressure` exactly once per crossing.
+- Existing per-adapter tests adjusted to reflect the new tool resolution.
 
 **Exit criteria:**
+
 - A workflow agent's `agent.ask` does not see `say` in its tool list.
 - A consulting / conversation / discussion agent sees `say` as before.
-- A bridge written in plain Python (no `@tool` decorator usage) successfully calls `adapter.build_packet_envelope(...) → hub_client.post_envelope(envelope)` to drive a workflow turn.
+- A bridge written in plain Python (no `@tool` decorator) calls `adapter.build_packet_envelope(...) → hub_client.post_envelope(envelope)` to drive a workflow turn.
 - `channels(action="open", message="...")` opens a new channel and the seed envelope appears in the WAL exactly once.
-- All PR3 anthropic smokes still pass.
+- A trivial `class MyHub(Hub)` overriding `on_envelope_posted` sees every envelope.
+- Causation index size for a closed channel drops to 0 after the next `_transition_channel`.
+- A `TaskMirror` failure produces a `mirror_failed` task event; the agent's turn is unaffected.
+- Crossing the inbox high-water mark fires `on_inbox_pressure` exactly once per crossing.
+- All PR3 + PR4 anthropic smokes still pass.
 
 **Risk:** medium. Tool resolution lives on the notify hot path. Re-validate against both anthropic smokes before requesting review.
 
-#### PR7 — Hub subclass surface + latent bug pass
-
-**Goal:** make Hub subclassable without monkey-patching and clear the three known issues surfaced during the stabilization review.
-
-**Files:**
-
-- Modified: `autogen/beta/network/hub/core.py`:
-  - Empty `async def on_envelope_posted(envelope, metadata) -> None` and siblings (`on_channel_opened`, `on_channel_closed`, `on_agent_registered`, `on_agent_unregistered`, `on_task_event`, `on_expectation_fired`) — Hub fires after the corresponding `HubListener` event; subclasses override directly without registering themselves.
-  - `Hub.register_sweeper(name, interval_seconds, callable)` extends the existing `_IntervalSweeper` mechanism. `unregister_sweeper(name)` for symmetry.
-  - Prune `_causation_index[channel_id]` on terminal transition (`_transition_channel`) and `mark_removed`. Memory leak fix.
-- Modified: `autogen/beta/network/hub/audit.py` — drop any closed-set check in the kind validator (if present); document that subclasses define their own kinds. Built-in kinds stay as module constants for convenience.
-- Modified: `autogen/beta/network/task_mirror.py` — replace the swallow-everything `except Exception` block in the hub-observation path with: log at ERROR, fire `on_task_event(task_id, "mirror_failed", payload)` through the hub's listeners, then re-raise into the caller only when the failure is non-transient. The hub-observation path stays best-effort (the mirror must still never crash the agent's turn) but failures are now visible.
-- Modified: `autogen/beta/network/hub/core.py` (inbox path) — fire `on_inbox_pressure(agent_id, pending_count)` when the count crosses a configurable high-water mark (`LimitsBlock.inbox.high_water` — defaults to 80% of cap, `None` disables).
-- Tests: `test/beta/network/test_subclass_surface.py`, `test/beta/network/test_task_mirror_errors.py`, `test/beta/network/test_causation_pruning.py`, `test/beta/network/test_inbox_pressure.py`.
-
-**Exit criteria:**
-- A trivial `class MyHub(Hub)` overriding `on_envelope_posted` sees every envelope without registering as a listener.
-- Causation index size for a closed channel returns to 0 after the next `_transition_channel`.
-- A `TaskMirror` failure produces a `mirror_failed` task event visible to operators; the agent's turn is not affected (still no crash).
-- Crossing the inbox high-water mark fires `on_inbox_pressure` exactly once per crossing (not per envelope).
-
 ### Test coverage targets
 
-- PR4: ≥ 12 unit tests + 2 re-enabled anthropic smokes
-- PR5: ≥ 20 unit tests (listener + arbiter + handler trap + health)
-- PR6: ≥ 10 unit tests + adjusted per-adapter tests + anthropic smoke validation
-- PR7: ≥ 12 unit tests across the three areas
+- PR4: ≥ 30 unit tests (HumanClient + listener + arbiter + handler trap + health) + 2 anthropic smokes re-enabled
+- PR5: ≥ 24 unit tests (tool layering + envelope helpers + subclass + bug fixes) + adjusted per-adapter tests + anthropic smoke re-validation
 
 Cumulative: ~54 new tests minimum, zero regressions against the current beta suite baseline.
 
@@ -346,11 +353,11 @@ Cumulative: ~54 new tests minimum, zero regressions against the current beta sui
 - Federation, JWT/mTLS auth, signed envelope chains.
 - Example adapters (`notification`, `broadcast`, `auction`); saga skeleton; transform stdlib.
 
-These re-enter planning after stabilization merges. The architectural seams in PR5–PR7 are deliberately shaped to admit federation, cross-process, and permission-protocol work without further restructuring.
+These re-enter planning after stabilization merges. The architectural seams added in PR4 (HubListener, HubArbiter) and PR5 (adapter-owned tools, subclass hooks) are deliberately shaped to admit federation, cross-process, and permission-protocol work without further restructuring.
 
 ### Operational notes
 
-- Each PR is authored on its own branch off the previous (`feat/network-pr4-human-client` off `main`, `feat/network-pr5-observability` off PR4, …). Tests pass at every commit.
+- Each PR is authored on its own branch off the previous (`feat/network-pr4-foundation` off `main`, `feat/network-pr5-adapter-tools-and-subclass` off PR4). Tests pass at every commit.
 - `design/` stays out of every PR (same rule as PR1–PR3).
 - Public code never references milestone/phase/PR numbers or design docs (CLAUDE.md rule). Module docstrings describe what the code does, not when it shipped.
 - PR bodies follow the existing skeleton (`## Why are these changes needed?` / `## What ships` / `## Test plan` / `## Related issue` / `## Checks` / `## AI assistance`).
