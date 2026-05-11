@@ -27,10 +27,11 @@ from ..channel import ChannelMetadata, ChannelState
 from ..envelope import Envelope
 from ..identity import Passport, Resume
 from ..rule import Rule
-from ..transport.frames import NotifyFrame
+from ..transport.frames import ChunkFrame, NotifyFrame
 from ..transport.local import LocalLink, LocalLinkClient
 from ..views.base import ViewPolicy
 from .agent_client import AgentClient
+from .chunks import ChunkDelta
 from .plugin import NetworkPlugin
 
 if TYPE_CHECKING:
@@ -93,6 +94,16 @@ class HubClient:
                             frame.envelope.event_type,
                             frame.recipient_id,
                         )
+                elif isinstance(frame, ChunkFrame):
+                    try:
+                        await self._dispatch_chunk(frame)
+                    except Exception:
+                        logger.exception(
+                            "receive loop chunk dispatch failed: channel=%s parent=%s recipient=%s",
+                            frame.channel_id,
+                            frame.parent_envelope_id,
+                            frame.recipient_id,
+                        )
                 # Other frame kinds (Accept/Error/Pong/Event) bypass the
                 # demuxer — the in-process send path goes direct via
                 # ``Hub.post_envelope`` so ``AcceptFrame`` is unused here.
@@ -103,6 +114,25 @@ class HubClient:
             # Receive loops must not propagate, but we log so the cause
             # of a dead loop is at least discoverable.
             logger.exception("receive loop terminated unexpectedly")
+
+    async def _dispatch_chunk(self, frame: ChunkFrame) -> None:
+        """Route an inbound chunk to the matching ``AgentClient``."""
+        if not frame.recipient_id:
+            return
+        client = self._clients.get(frame.recipient_id)
+        if client is None:
+            return
+        delta = ChunkDelta(
+            sender_id=frame.sender_id,
+            sequence=frame.sequence,
+            text=frame.text,
+            is_final=frame.is_final,
+        )
+        await client.receive_chunk(
+            delta,
+            channel_id=frame.channel_id,
+            parent_envelope_id=frame.parent_envelope_id,
+        )
 
     async def _dispatch_notify(self, frame: NotifyFrame) -> None:
         """Route the envelope to the recipient stamped on the frame.
@@ -320,6 +350,15 @@ class HubClient:
 
     async def post_envelope(self, envelope: Envelope) -> str:
         return await self._hub.post_envelope(envelope)
+
+    async def post_chunk(self, frame: ChunkFrame) -> None:
+        """Hand a streaming chunk to the hub for fan-out.
+
+        Chunks are ephemeral — not persisted to the WAL. The hub
+        validates audience/access and forwards one ``ChunkFrame`` per
+        recipient.
+        """
+        await self._hub.post_chunk(frame)
 
     async def read_wal(self, channel_id: str, *, since: int = 0, until: int | None = None) -> list[Envelope]:
         return await self._hub.read_wal(channel_id, since=since, until=until)

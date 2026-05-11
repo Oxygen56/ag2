@@ -166,6 +166,7 @@ from .transitions import (
 )
 from .transport import (
     AcceptFrame,
+    ChunkFrame,
     ErrorFrame,
     EventFrame,
     Frame,
@@ -251,6 +252,7 @@ __all__ = (
     "ChannelState",
     "ChannelStateInject",
     "ChannelTypeAccess",
+    "ChunkFrame",
     "ClientTask",
     "ConsultingAdapter",
     "ConsultingState",

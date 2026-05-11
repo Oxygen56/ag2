@@ -26,7 +26,7 @@ includes ``NetworkContextPolicy``.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from autogen.beta.agent import Agent
@@ -35,8 +35,10 @@ from autogen.beta.task import CheckpointStore
 from ..envelope import Envelope
 from ..identity import Passport, Resume, ResumeExample
 from ..rule import Rule
+from ..transport.frames import ChunkFrame
 from .channel import Channel
 from .checkpoint import HubBackedCheckpointStore
+from .chunks import ChunkDelta, ChunkSubscription
 from .handlers import default_handler
 
 if TYPE_CHECKING:
@@ -92,6 +94,10 @@ class AgentClient:
         # Lazy — only constructed if accessed; standalone agents that
         # never checkpoint pay no cost.
         self._checkpoint_store: CheckpointStore | None = None
+
+        # Per-(channel_id, parent_envelope_id) chunk subscription map.
+        # Populated by ``iter_chunks`` callers; cleared on terminal chunk.
+        self._chunk_subscriptions: dict[tuple[str, str], ChunkSubscription] = {}
 
     # ── Properties ───────────────────────────────────────────────────────────
 
@@ -297,6 +303,76 @@ class AgentClient:
         if envelope.sender_id == "":
             envelope.sender_id = self.agent_id
         return await self._hub_client.post_envelope(envelope)
+
+    # ── Streaming chunks ─────────────────────────────────────────────────────
+
+    async def send_chunk(
+        self,
+        *,
+        channel_id: str,
+        parent_envelope_id: str,
+        text: str,
+        sequence: int,
+        audience: list[str] | None = None,
+        is_final: bool = False,
+    ) -> None:
+        """Post a streaming chunk attached to ``parent_envelope_id``.
+
+        Chunks are ephemeral — not persisted to the WAL. The hub fans
+        out per recipient using the same audience/access path as
+        ``NotifyFrame``.
+        """
+        if self._disconnected:
+            raise RuntimeError("AgentClient is disconnected")
+        frame = ChunkFrame(
+            channel_id=channel_id,
+            parent_envelope_id=parent_envelope_id,
+            sender_id=self.agent_id,
+            sequence=sequence,
+            text=text,
+            audience=audience,
+            is_final=is_final,
+        )
+        await self._hub_client.post_chunk(frame)
+
+    async def receive_chunk(
+        self,
+        delta: ChunkDelta,
+        *,
+        channel_id: str,
+        parent_envelope_id: str,
+    ) -> None:
+        """Internal hook: route an inbound ``ChunkFrame`` to the
+        matching subscription. Called by ``HubClient._dispatch_chunk``.
+        """
+        sub = self._chunk_subscriptions.get((channel_id, parent_envelope_id))
+        if sub is None:
+            return
+        await sub.put(delta)
+        # The subscription closes itself once ``is_final`` lands;
+        # drop our reference so the next ``iter_chunks`` for the same
+        # parent doesn't pick up a closed handle.
+        if delta.is_final:
+            self._chunk_subscriptions.pop((channel_id, parent_envelope_id), None)
+
+    async def iter_chunks(
+        self,
+        channel_id: str,
+        parent_envelope_id: str,
+    ) -> AsyncIterator[ChunkDelta]:
+        """Yield inbound chunks for ``(channel_id, parent_envelope_id)``.
+
+        Yields until the terminal chunk lands or the caller breaks.
+        Multiple in-flight streams stay isolated by ``parent_envelope_id``.
+        """
+        sub = ChunkSubscription()
+        self._chunk_subscriptions[(channel_id, parent_envelope_id)] = sub
+        try:
+            async for delta in sub:
+                yield delta
+        finally:
+            await sub.close()
+            self._chunk_subscriptions.pop((channel_id, parent_envelope_id), None)
 
     # ── Tenant-driven mutation ───────────────────────────────────────────────
 

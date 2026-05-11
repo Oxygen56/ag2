@@ -9,6 +9,7 @@ tools / handlers can ``send`` envelopes, ``close`` early, or ``info``
 the current state without reaching back through the hub directly.
 """
 
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from ..channel import ChannelMetadata, ChannelState
@@ -16,6 +17,7 @@ from ..envelope import EV_TEXT, Envelope
 
 if TYPE_CHECKING:
     from .agent_client import AgentClient
+    from .chunks import ChunkDelta
 
 __all__ = ("Channel",)
 
@@ -95,3 +97,41 @@ class Channel:
 
     def is_terminal(self) -> bool:
         return self._metadata.is_terminal()
+
+    async def send_chunk(
+        self,
+        parent_envelope_id: str,
+        text: str,
+        *,
+        sequence: int,
+        audience: list[str] | None = None,
+        is_final: bool = False,
+    ) -> None:
+        """Post a streaming chunk attached to a prior envelope.
+
+        Chunks are ephemeral — not persisted to the WAL. ``audience``
+        defaults to the parent envelope's audience (which the hub
+        re-derives at fan-out). ``sequence`` is sender-monotonic per
+        ``parent_envelope_id`` so receivers can detect drops; the
+        sender owns assignment. ``is_final=True`` marks the terminal
+        chunk for the parent stream.
+        """
+        await self._client.send_chunk(
+            channel_id=self.channel_id,
+            parent_envelope_id=parent_envelope_id,
+            text=text,
+            sequence=sequence,
+            audience=audience,
+            is_final=is_final,
+        )
+
+    def iter_chunks(self, parent_envelope_id: str) -> AsyncIterator["ChunkDelta"]:
+        """Subscribe to inbound chunks for a parent envelope id.
+
+        Yields ``ChunkDelta`` instances until the terminal chunk
+        (``is_final=True``) lands or the caller breaks. Multiple
+        in-flight streams to the same agent on the same channel stay
+        isolated — the subscription only sees chunks matching this
+        parent envelope id.
+        """
+        return self._client.iter_chunks(self.channel_id, parent_envelope_id)

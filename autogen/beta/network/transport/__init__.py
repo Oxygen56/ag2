@@ -10,6 +10,7 @@ lets cross-process transports plug in without affecting layers above.
 
 from .frames import (
     AcceptFrame,
+    ChunkFrame,
     ErrorFrame,
     EventFrame,
     Frame,
@@ -30,6 +31,7 @@ from .local import LocalLink, LocalLinkClient, LocalLinkEndpoint
 
 __all__ = (
     "AcceptFrame",
+    "ChunkFrame",
     "ErrorFrame",
     "EventFrame",
     "Frame",

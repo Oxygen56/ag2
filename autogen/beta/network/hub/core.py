@@ -73,6 +73,7 @@ from ..ids import make_id
 from ..rule import Rule, parse_duration
 from ..transport.frames import (
     AcceptFrame,
+    ChunkFrame,
     ErrorFrame,
     Frame,
     HelloFrame,
@@ -1115,6 +1116,53 @@ class Hub:
             envelopes.append(Envelope.from_json(line))
         end = len(envelopes) if until is None else until
         return envelopes[since:end]
+
+    async def post_chunk(self, frame: ChunkFrame) -> None:
+        """Fan out a streaming chunk to recipients.
+
+        Chunks are ephemeral — no WAL append, no adapter fold. Validates
+        the sender is a channel participant; recipients are derived from
+        ``frame.audience`` (or all non-sender participants if ``None``)
+        with the same inbound-from access check the envelope dispatcher
+        applies. Skipping the WAL keeps chunk throughput cheap; the
+        consolidated text envelope posted after the final chunk is the
+        durable record.
+        """
+        metadata = self._channels.get(frame.channel_id)
+        if metadata is None or metadata.state != ChannelState.ACTIVE:
+            return
+        participant_ids = {p.agent_id for p in metadata.participants}
+        if frame.sender_id not in participant_ids:
+            return
+        if frame.audience is None:
+            recipients = [pid for pid in participant_ids if pid != frame.sender_id]
+        else:
+            recipients = [pid for pid in frame.audience if pid in participant_ids]
+
+        sender_passport = self._passports.get(frame.sender_id)
+        sender_name = sender_passport.name if sender_passport is not None else frame.sender_id
+        hidden = self._hidden_in_channel.get(frame.channel_id, set())
+        for recipient_id in recipients:
+            if recipient_id in hidden:
+                continue
+            recipient_rule = self._rules.get(recipient_id)
+            if recipient_rule is not None and not _match_any(sender_name, recipient_rule.access.inbound_from):
+                continue
+            endpoint = self._endpoint_for(recipient_id)
+            if endpoint is None:
+                continue
+            await endpoint.send_frame(
+                ChunkFrame(
+                    channel_id=frame.channel_id,
+                    parent_envelope_id=frame.parent_envelope_id,
+                    sender_id=frame.sender_id,
+                    sequence=frame.sequence,
+                    text=frame.text,
+                    audience=frame.audience,
+                    is_final=frame.is_final,
+                    recipient_id=recipient_id,
+                )
+            )
 
     def find_envelope_by_causation(
         self,
