@@ -1680,8 +1680,26 @@ class Hub:
         by_channel[(envelope.sender_id, envelope.causation_id)] = envelope
 
     async def _dispatch(self, envelope: Envelope, metadata: ChannelMetadata) -> None:
-        """Send NotifyFrames to the audience (or all participants if broadcast)."""
-        if envelope.audience is None:
+        """Send NotifyFrames to the audience (or all participants if broadcast).
+
+        Adapters may narrow the audience via the optional
+        ``dispatch_audience`` hook — used by ``WorkflowAdapter`` to
+        skip wire round-trips for participants who aren't the next
+        speaker. The hook is ``getattr``'d so adapters that don't
+        implement it (consulting / conversation / discussion) keep
+        the broadcast default.
+        """
+        adapter = self._adapters.get((metadata.manifest.type, metadata.manifest.version))
+        override: list[str] | None = None
+        if adapter is not None:
+            hook = getattr(adapter, "dispatch_audience", None)
+            if hook is not None:
+                state = self._adapter_states.get(envelope.channel_id)
+                override = hook(envelope, metadata, state)
+
+        if override is not None:
+            recipients = list(override)
+        elif envelope.audience is None:
             recipients = [p.agent_id for p in metadata.participants if p.agent_id != envelope.sender_id]
         else:
             recipients = list(envelope.audience)

@@ -329,6 +329,35 @@ class WorkflowAdapter:
         recent_n = max(len(metadata.participants) * 2, 4)
         return WindowedSummary(recent_n=recent_n)
 
+    def dispatch_audience(
+        self,
+        envelope: Envelope,
+        metadata: ChannelMetadata,
+        state: WorkflowState,
+    ) -> list[str] | None:
+        """Narrow substantive deliveries to the next speaker only.
+
+        ``post_envelope`` calls this after ``fold`` advances
+        ``expected_next_speaker``, so the new value is already the
+        agent who should receive the just-accepted text/packet. Other
+        participants don't need a wire round-trip for a turn that
+        isn't theirs to take.
+
+        Returning ``None`` for protocol envelopes and edge cases
+        (terminated workflow, sender-equals-next-speaker, explicit
+        audience already set) keeps the hub on its default fan-out
+        path.
+        """
+        if not _is_substantive(envelope):
+            return None
+        if envelope.audience is not None:
+            # Caller already specified an audience — respect it.
+            return None
+        next_speaker = state.expected_next_speaker
+        if next_speaker is None or next_speaker == envelope.sender_id:
+            return None
+        return [next_speaker]
+
     def extract_turn_input(self, envelope: Envelope) -> str | None:
         """Decode an inbound substantive envelope into the next
         speaker's prompt. Workflow handles ``EV_TEXT`` and
