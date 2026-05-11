@@ -31,6 +31,8 @@ __all__ = (
     "PingFrame",
     "PongFrame",
     "ReceiptFrame",
+    "RpcCallFrame",
+    "RpcResultFrame",
     "SendFrame",
     "SubscribeFrame",
     "UnsubscribeFrame",
@@ -205,6 +207,38 @@ class NetworkChangedFrame:
 
 
 @dataclass(slots=True)
+class RpcCallFrame:
+    """client → hub: invoke a named control-plane method.
+
+    Generic request/response pair used by ``HubClient`` when operating
+    over a wire transport (no in-process ``Hub`` reference). The hub
+    dispatches ``method`` against a fixed allowlist; ``args`` is the
+    keyword-argument dict. ``request_id`` is client-generated and
+    correlates the response.
+    """
+
+    kind: ClassVar[str] = "rpc.call"
+    request_id: str
+    method: str
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RpcResultFrame:
+    """hub → client: response to an ``RpcCallFrame``.
+
+    Exactly one of ``result`` or ``error`` is populated. ``result``
+    carries the JSON-serialised return value; ``error`` carries a
+    ``{"code": str, "message": str}`` dict mirroring ``ErrorFrame``.
+    """
+
+    kind: ClassVar[str] = "rpc.result"
+    request_id: str
+    result: Any = None
+    error: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
 class ChunkFrame:
     """Streaming partial-text frame.
 
@@ -252,6 +286,8 @@ Frame: TypeAlias = (
     | EventFrame
     | ChunkFrame
     | NetworkChangedFrame
+    | RpcCallFrame
+    | RpcResultFrame
 )
 
 
@@ -270,6 +306,8 @@ _FRAME_CLASSES: dict[str, type] = {
     "event": EventFrame,
     "chunk": ChunkFrame,
     "network_changed": NetworkChangedFrame,
+    "rpc.call": RpcCallFrame,
+    "rpc.result": RpcResultFrame,
 }
 
 

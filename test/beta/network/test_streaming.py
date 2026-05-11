@@ -225,6 +225,130 @@ async def test_parallel_streams_stay_isolated_by_parent_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_owner_cannot_chunk_someone_elses_envelope() -> None:
+    """Only the sender of the parent envelope may post chunks for it.
+
+    Alice posts a stub envelope and starts streaming. Bob tries to
+    inject a chunk claiming the same parent — rejected because bob
+    doesn't own the parent. Adapter-agnostic: this holds for every
+    channel type.
+    """
+    from autogen.beta.network.errors import ProtocolError
+    from autogen.beta.network.transport.frames import ChunkFrame
+
+    hub = await Hub.open(MemoryKnowledgeStore(), ttl_sweep_interval=0)
+    alice, bob, session = await _consulting_pair(hub)
+    audience = [p.agent_id for p in session.metadata.participants if p.agent_id != alice.agent_id]
+    parent_id = await session.send("[streaming]", audience=audience)
+
+    bad = ChunkFrame(
+        channel_id=session.channel_id,
+        parent_envelope_id=parent_id,
+        sender_id=bob.agent_id,
+        sequence=0,
+        text="injection",
+        is_final=True,
+    )
+    with pytest.raises(ProtocolError, match="does not own parent envelope"):
+        await hub.post_chunk(bad)
+
+
+@pytest.mark.asyncio
+async def test_chunk_on_unknown_parent_is_rejected() -> None:
+    """A chunk referencing a non-existent parent envelope raises."""
+    from autogen.beta.network.errors import ProtocolError
+    from autogen.beta.network.transport.frames import ChunkFrame
+
+    hub = await Hub.open(MemoryKnowledgeStore(), ttl_sweep_interval=0)
+    alice, _bob, session = await _consulting_pair(hub)
+
+    bad = ChunkFrame(
+        channel_id=session.channel_id,
+        parent_envelope_id="env-does-not-exist",
+        sender_id=alice.agent_id,
+        sequence=0,
+        text="ghost",
+        is_final=True,
+    )
+    with pytest.raises(ProtocolError, match="parent envelope.*not found"):
+        await hub.post_chunk(bad)
+
+
+@pytest.mark.asyncio
+async def test_workflow_chunk_blocked_when_sender_did_not_post_parent() -> None:
+    """In a workflow where alice spoke and bob is now expected, bob
+    cannot inject a chunk claiming alice's parent envelope."""
+    from autogen.beta.network.adapters.workflow import WORKFLOW_TYPE
+    from autogen.beta.network.errors import ProtocolError
+    from autogen.beta.network.transitions import (
+        AgentTarget,
+        Always,
+        TerminateTarget,
+        Transition,
+        TransitionGraph,
+    )
+    from autogen.beta.network.transport.frames import ChunkFrame
+
+    hub = await Hub.open(MemoryKnowledgeStore(), ttl_sweep_interval=0)
+    link = LocalLink(hub)
+    a_hc = HubClient(link, hub=hub)
+    b_hc = HubClient(link, hub=hub)
+    alice = await a_hc.register(_agent("alice"), Passport(name="alice"), Resume())
+    bob = await b_hc.register(_agent("bob"), Passport(name="bob"), Resume())
+
+    graph = TransitionGraph(
+        initial_speaker=alice.agent_id,
+        transitions=[Transition(when=Always(), then=AgentTarget(bob.agent_id))],
+        default_target=TerminateTarget(reason="end"),
+    )
+    # Open the channel first so bob's default handler auto-acks the invite,
+    # then swap to a no-op handler so we control the turn-taking explicitly.
+    session = await alice.open(
+        type=WORKFLOW_TYPE,
+        target=[bob.agent_id],
+        knobs={"graph": graph.to_dict()},
+    )
+    bob.on_envelope(_noop)
+
+    # Alice takes her turn — posts an envelope. After fold, bob is
+    # expected_next_speaker.
+    from autogen.beta.network.envelope import EV_PACKET, Envelope
+
+    parent = Envelope(
+        channel_id=session.channel_id,
+        sender_id=alice.agent_id,
+        audience=None,
+        event_type=EV_PACKET,
+        event_data={"routing": {"kind": "text"}, "body": "hello"},
+    )
+    parent_id = await hub.post_envelope(parent)
+
+    # Bob tries to chunk against alice's parent — rejected.
+    bad = ChunkFrame(
+        channel_id=session.channel_id,
+        parent_envelope_id=parent_id,
+        sender_id=bob.agent_id,
+        sequence=0,
+        text="bob-injection",
+        is_final=True,
+    )
+    with pytest.raises(ProtocolError, match="does not own parent envelope"):
+        await hub.post_chunk(bad)
+
+    # Alice can still stream against her own parent — even though
+    # she's no longer the current speaker.
+    ok = ChunkFrame(
+        channel_id=session.channel_id,
+        parent_envelope_id=parent_id,
+        sender_id=alice.agent_id,
+        sequence=0,
+        text="alice-late-chunk",
+        is_final=True,
+    )
+    await hub.post_chunk(ok)  # no raise
+
+
+@pytest.mark.asyncio
 async def test_send_chunk_returns_monotonic_sequence() -> None:
     """Sender-side sequence is 0, 1, 2, … per parent envelope id."""
     hub = await Hub.open(MemoryKnowledgeStore(), ttl_sweep_interval=0)

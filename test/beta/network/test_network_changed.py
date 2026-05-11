@@ -148,6 +148,50 @@ async def test_set_resume_invalidates_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_observation_invalidates_cache() -> None:
+    """A capability observation pushed by the hub invalidates peer caches.
+
+    Without the broadcast, an agent that already cached bob's resume
+    would not see bob's newly-observed capability until something else
+    invalidated the entry.
+    """
+    from autogen.beta.task import TaskState
+
+    hub = await Hub.open(MemoryKnowledgeStore(), ttl_sweep_interval=0)
+
+    alice_hc = HubClient(LocalLink(hub), hub=hub)
+    bob_hc = HubClient(LocalLink(hub), hub=hub)
+    await alice_hc.register(_agent("alice"), Passport(name="alice"), Resume())
+    bob = await bob_hc.register(_agent("bob"), Passport(name="bob"), Resume(claimed_capabilities=["math"]))
+
+    # Prime alice's cache with bob's pre-observation resume.
+    pre = await alice_hc.get_resume(bob.agent_id)
+    assert "math" in pre.claimed_capabilities
+    assert ("get_resume", bob.agent_id) in alice_hc._discovery_cache
+
+    # Hub-driven observation: bob completed a math task.
+    await hub.record_observation(
+        owner_id=bob.agent_id,
+        capability="math",
+        outcome=TaskState.COMPLETED,
+        latency_ms=42,
+        task_id="task-obs-1",
+    )
+    await asyncio.sleep(0.05)
+
+    # Inbound NetworkChangedFrame cleared the cache.
+    assert alice_hc._discovery_cache == {}
+
+    refreshed = await alice_hc.get_resume(bob.agent_id)
+    assert refreshed.observed["math"].n == 1
+    assert refreshed.observed["math"].completed == 1
+
+    await alice_hc.shutdown()
+    await bob_hc.shutdown()
+    await hub.close()
+
+
+@pytest.mark.asyncio
 async def test_set_skill_invalidates_cache() -> None:
     hub = await Hub.open(MemoryKnowledgeStore(), ttl_sweep_interval=0)
 

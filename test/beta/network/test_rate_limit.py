@@ -213,3 +213,44 @@ async def test_protocol_envelopes_bypass_rate_limit() -> None:
     # despite alice's bucket being empty.
     closed = await session.close()
     assert closed.state == ChannelState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_denied_send_does_not_debit_bucket() -> None:
+    """Pre-rate denial leaves the bucket intact for the next valid post.
+
+    A substantive send rejected on depth grounds raises before the
+    rate-limit check runs. The token is still available for the next
+    legitimate post — proves rate runs after access / depth / inbox.
+    """
+    from autogen.beta.network.errors import AccessDeniedError
+
+    clock = _MonotonicClock()
+    hub = await Hub.open(
+        MemoryKnowledgeStore(),
+        ttl_sweep_interval=0,
+        monotonic_clock=clock,
+    )
+    rule = Rule(
+        limits=LimitsBlock(
+            rate=RateBlock(per_minute=60, burst=1),
+            delegation_depth=2,
+        )
+    )
+    alice, _bob, session = await _open_consulting(hub, alice_rule=rule)
+    audience = [p.agent_id for p in session.metadata.participants if p.agent_id != alice.agent_id]
+
+    # depth=5 exceeds delegation_depth=2 → AccessDeniedError before rate check.
+    too_deep = Envelope(
+        channel_id=session.channel_id,
+        sender_id=alice.agent_id,
+        audience=audience,
+        event_type=EV_TEXT,
+        event_data={"text": "too deep"},
+        depth=5,
+    )
+    with pytest.raises(AccessDeniedError):
+        await alice.send_envelope(too_deep)
+
+    # Bucket retained its single token — this send succeeds.
+    await session.send("first-valid-send", audience=audience)

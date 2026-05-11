@@ -186,11 +186,14 @@ from .transport import (
     SubscribeFrame,
     UnsubscribeFrame,
     WelcomeFrame,
+    WsLink,
+    WsLinkClient,
+    WsLinkEndpoint,
     decode_frame,
     encode_frame,
+    make_http_app,
+    serve_ws,
 )
-from .transport.http import make_http_app
-from .transport.ws import WsLink, WsLinkClient, WsLinkEndpoint, serve_ws
 from .views import FullTranscript, ViewPolicy, WindowedSummary
 
 __all__ = (

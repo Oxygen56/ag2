@@ -387,8 +387,13 @@ class WorkflowAdapter:
         static routing; dynamic Handoff carries its resolved target
         on the packet's ``routing.target`` field.
 
-        Returns ``None`` for silent rounds (no body and no routing
-        tool fired) — matches pre-packet "no envelope" behaviour.
+        Silent rounds (no body, no routing tool) still produce an
+        envelope so ``fold`` rotates the expected speaker and the
+        workflow makes progress against ``max_turns``. The packet
+        carries an empty body and ``routing.kind == "text"``;
+        downstream speakers whose ``extract_turn_input`` returns
+        ``None`` simply skip their LLM turn, and the workflow either
+        keeps rotating or hits its turn cap.
         """
         graph: TransitionGraph | None = None
         if state is not None and state.graph_data:
@@ -399,9 +404,6 @@ class WorkflowAdapter:
 
         routing = _resolve_routing(events, graph, hub._name_to_id)
         body = reply.body or ""
-
-        if routing["kind"] == "text" and not body:
-            return None
 
         return Envelope(
             channel_id=metadata.channel_id,

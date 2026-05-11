@@ -67,15 +67,15 @@ async def read_wal_until(client: "AgentClient", envelope: Envelope) -> list[Enve
     return history
 
 
-def resolve_view_policy(
+async def resolve_view_policy(
     client: "AgentClient",
     metadata: ChannelMetadata,
 ) -> ViewPolicy:
     """Return the adapter's default view policy for this participant."""
-    return client._hub_client.default_view_policy(metadata.channel_id, client.agent_id)
+    return await client._hub_client.default_view_policy(metadata.channel_id, client.agent_id)
 
 
-def stamp_dependencies(
+async def stamp_dependencies(
     client: "AgentClient",
     channel: Channel,
 ) -> dict[object, object]:
@@ -85,12 +85,17 @@ def stamp_dependencies(
     object (``WorkflowState`` / ``DiscussionState`` / ...). Tools that
     need to read channel-scoped state (e.g. ``context_vars`` on a
     workflow channel) inject it via ``ChannelStateInject``.
+
+    ``HUB_DEP`` resolves to the in-process ``Hub`` for fast-path
+    callers (or to the ``HubClient`` when no in-process hub is
+    available, e.g. wire transport). Tools that read hub-only
+    attributes should fall back to the ``HubClient`` API.
     """
     return {
         CHANNEL_DEP: channel,
         AGENT_CLIENT_DEP: client,
-        HUB_DEP: client._hub,
-        CHANNEL_STATE_DEP: client._hub_client.adapter_state(channel.channel_id),
+        HUB_DEP: client._hub if client._hub is not None else client._hub_client,
+        CHANNEL_STATE_DEP: await client._hub_client.adapter_state(channel.channel_id),
     }
 
 
@@ -131,27 +136,25 @@ async def _process_substantive(envelope: Envelope, client: "AgentClient") -> Non
 
     # "Can we respond now?" — ask the hub via the public probe surface
     # so the handler doesn't need to reach into adapter internals.
-    if not client._hub_client.can_send(envelope.channel_id, client.agent_id):
+    if not await client._hub_client.can_send(envelope.channel_id, client.agent_id):
         return  # not our turn / channel closing — don't engage LLM
 
     # If a reply with this causation has already been accepted,
     # redelivery (or a resumed pending turn) is a no-op. Without the
     # WAL stamp the envelope_id is empty — only check when the hub has
     # actually accepted the inbound.
-    if (
-        envelope.envelope_id
-        and client._hub_client.find_envelope_by_causation(
+    if envelope.envelope_id:
+        prior = await client._hub_client.find_envelope_by_causation(
             envelope.channel_id,
             sender_id=client.agent_id,
             causation_id=envelope.envelope_id,
         )
-        is not None
-    ):
-        return  # already replied to this trigger; idempotent dedup
+        if prior is not None:
+            return  # already replied to this trigger; idempotent dedup
 
-    adapter = client._hub_client.adapter_for(metadata.channel_id)
+    adapter = await client._hub_client.adapter_for(metadata.channel_id)
     channel = Channel(metadata=metadata, client=client)
-    view = resolve_view_policy(client, metadata)
+    view = await resolve_view_policy(client, metadata)
 
     history_envelopes = await read_wal_until(client, envelope)
     projection: list[BaseEvent] = await view.project(
@@ -173,7 +176,7 @@ async def _process_substantive(envelope: Envelope, client: "AgentClient") -> Non
     if projection:
         await stream.history.storage.set_history(stream.id, projection)
 
-    dependencies = stamp_dependencies(client, channel)
+    dependencies = await stamp_dependencies(client, channel)
 
     # Attach the TaskMirror for the duration of the LLM turn so any
     # ``agent.task(...)`` (typically via the ``tasks(action="start")``
@@ -197,15 +200,20 @@ async def _process_substantive(envelope: Envelope, client: "AgentClient") -> Non
     # Adapter encodes the round-end envelope.
     # For example, Workflow returns EV_PACKET.
     # Default implementations returns EV_TEXT(body) or None.
-    state = client._hub_client.adapter_state(metadata.channel_id)
+    state = await client._hub_client.adapter_state(metadata.channel_id)
     events = list(await stream.history.get_events())
+    # ``hub`` is the resolver source for name → agent_id translation
+    # used by the workflow adapter when routing handoffs. Both Hub and
+    # HubClient expose ``_name_to_id``; pass the in-process hub when
+    # available (full population), else the wire-mode client mirror.
+    name_resolver = client._hub if client._hub is not None else client._hub_client
     out_envelope = adapter.build_round_envelope(
         metadata=metadata,
         sender_id=client.agent_id,
         reply=reply,
         events=events,
         state=state,
-        hub=client._hub,
+        hub=name_resolver,
     )
     if out_envelope is None:
         return

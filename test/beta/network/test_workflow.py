@@ -619,3 +619,81 @@ async def test_workflow_validate_create_rejects_missing_graph() -> None:
     await a_hc.close()
     await b_hc.close()
     await hub.close()
+
+
+@pytest.mark.asyncio
+async def test_workflow_silent_round_still_advances_speaker() -> None:
+    """An empty-body, no-routing turn still posts a packet so the
+    workflow rotates instead of stalling on the silent speaker.
+
+    Without this, an agent that produces no text and triggers no
+    handoff would hang ``expected_next_speaker`` on themselves
+    indefinitely (until ``turn_within`` fires) — and any peer who
+    received nothing to react to could never advance the workflow on
+    their own.
+    """
+    from types import SimpleNamespace
+
+    from autogen.beta.network.channel import (
+        ChannelManifest,
+        ChannelMetadata,
+        Participant,
+        ParticipantRole,
+    )
+
+    adapter = WorkflowAdapter()
+    graph = TransitionGraph(
+        initial_speaker="alice",
+        transitions=[Transition(when=Always(), then=RoundRobinTarget())],
+        default_target=TerminateTarget(reason="end"),
+    )
+
+    metadata = ChannelMetadata(
+        channel_id="sess-1",
+        manifest=ChannelManifest(type=WORKFLOW_TYPE, version=1),
+        creator_id="alice",
+        participants=[
+            Participant(agent_id="alice", role=ParticipantRole.INITIATOR, order=0),
+            Participant(agent_id="bob", role=ParticipantRole.PARTICIPANT, order=1),
+        ],
+        state=ChannelState.ACTIVE,
+        knobs={"graph": graph.to_dict()},
+        created_at="2026-05-06T00:00:00+00:00",
+    )
+    state = adapter.initial_state(metadata)
+
+    # Stand-in hub providing the one attribute build_round_envelope reads.
+    class _StubHub:
+        _name_to_id: dict[str, str] = {}
+
+    # build_round_envelope only reads ``reply.body`` — a duck-typed stub
+    # is enough; AgentReply's real constructor wants a ModelResponse
+    # which is overkill for this contract test.
+    empty_reply = SimpleNamespace(body="")
+    envelope = adapter.build_round_envelope(
+        metadata=metadata,
+        sender_id="alice",
+        reply=empty_reply,
+        events=[],
+        state=state,
+        hub=_StubHub(),
+    )
+
+    # A silent round still produces a packet so fold can rotate.
+    assert envelope is not None
+    assert envelope.event_type == EV_PACKET
+    assert envelope.event_data["body"] == ""
+    assert envelope.event_data["routing"] == {"kind": "text"}
+
+    # Folding the packet rotates expected_next_speaker — the workflow
+    # makes progress even though alice said nothing.
+    envelope.envelope_id = "env-1"
+    new_state = adapter.fold(envelope, state)
+    assert new_state.expected_next_speaker == "bob"
+    assert new_state.turn_count == 1
+
+    # The receiver's extract_turn_input returns None on an empty packet
+    # so the next speaker's handler skips the LLM turn — silence stays
+    # silence; the workflow ends via max_turns / turn_within rather
+    # than hanging.
+    assert adapter.extract_turn_input(envelope) is None

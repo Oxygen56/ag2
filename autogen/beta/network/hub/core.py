@@ -34,6 +34,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from autogen.beta.knowledge import KnowledgeStore
 from autogen.beta.task import TERMINAL_TASK_STATES, TaskMetadata, TaskSpec, TaskState
@@ -85,6 +86,8 @@ from ..transport.frames import (
     PingFrame,
     PongFrame,
     ReceiptFrame,
+    RpcCallFrame,
+    RpcResultFrame,
     SendFrame,
     WelcomeFrame,
 )
@@ -874,6 +877,7 @@ class Hub:
             "capability": capability,
             "outcome": outcome.value,
         })
+        await self._broadcast_network_changed("observation_recorded", owner_id)
 
     def agents_with_capability(self, capability: str) -> list[str]:
         """Return agent_ids matching ``capability`` (claimed or observed)."""
@@ -1164,20 +1168,49 @@ class Hub:
     async def post_chunk(self, frame: ChunkFrame) -> None:
         """Fan out a streaming chunk to recipients.
 
-        Chunks are ephemeral — no WAL append, no adapter fold. Validates
-        the sender is a channel participant; recipients are derived from
-        ``frame.audience`` (or all non-sender participants if ``None``)
-        with the same inbound-from access check the envelope dispatcher
-        applies. Skipping the WAL keeps chunk throughput cheap; the
-        consolidated text envelope posted after the final chunk is the
-        durable record.
+        Chunks are ephemeral — no WAL append, no adapter fold. Contract:
+
+        * The channel must be active.
+        * The sender must own ``parent_envelope_id`` (i.e. it must
+          appear in the WAL with ``sender_id == frame.sender_id``).
+          This is adapter-agnostic and naturally enforces speaker
+          invariants: a non-current-speaker in a turn-gated adapter
+          like ``workflow`` cannot post chunks because they don't own
+          any parent envelope. Conversely, a sender who legitimately
+          posted an envelope can continue streaming its chunks even
+          after the turn rotates.
+
+        Recipients are derived from ``frame.audience`` (or all
+        non-sender participants if ``None``) with the same
+        inbound-from access check the envelope dispatcher applies.
+        Skipping the WAL keeps chunk throughput cheap; the
+        consolidated text envelope posted after the final chunk is
+        the durable record.
         """
         metadata = self._channels.get(frame.channel_id)
         if metadata is None or metadata.state != ChannelState.ACTIVE:
-            return
+            raise ProtocolError(f"channel {frame.channel_id!r} not active")
         participant_ids = {p.agent_id for p in metadata.participants}
         if frame.sender_id not in participant_ids:
-            return
+            raise ProtocolError(f"sender {frame.sender_id!r} is not a participant in channel {frame.channel_id!r}")
+
+        # Ownership check: chunks elaborate an existing envelope. The
+        # sender must own that envelope. The causation index gives an
+        # O(1) lookup keyed by (sender, parent_envelope_id-as-causation)
+        # only when chunks chain replies; for the common "stream my own
+        # turn" case we walk the WAL once.
+        wal = await self.read_wal(frame.channel_id)
+        parent = next((env for env in wal if env.envelope_id == frame.parent_envelope_id), None)
+        if parent is None:
+            raise ProtocolError(
+                f"parent envelope {frame.parent_envelope_id!r} not found in channel {frame.channel_id!r}"
+            )
+        if parent.sender_id != frame.sender_id:
+            raise ProtocolError(
+                f"chunk sender {frame.sender_id!r} does not own parent envelope "
+                f"{frame.parent_envelope_id!r} (owned by {parent.sender_id!r})"
+            )
+
         if frame.audience is None:
             recipients = [pid for pid in participant_ids if pid != frame.sender_id]
         else:
@@ -1485,23 +1518,6 @@ class Hub:
             if removed is not None and envelope.sender_id in removed:
                 raise ProtocolError(f"sender {envelope.sender_id!r} removed from channel {envelope.channel_id!r}")
 
-        # Per-sender rate limit. Protocol envelopes (acks, opens,
-        # expectation violations) bypass so the channel state machine
-        # can advance even under throttle. Substantive events only.
-        if not _is_protocol_event(envelope.event_type):
-            if envelope.sender_id in self._rate_buckets:
-                bucket = self._rate_buckets[envelope.sender_id]
-            else:
-                rate = sender_rule.limits.rate
-                bucket = make_bucket(rate.per_minute, rate.burst, self._monotonic())
-                self._rate_buckets[envelope.sender_id] = bucket
-            if bucket is not None and not bucket.consume(self._monotonic()):
-                rate = sender_rule.limits.rate
-                raise RateLimited(
-                    f"sender {sender.name!r} rate limited "
-                    f"(per_minute={rate.per_minute}, burst={rate.burst or rate.per_minute})"
-                )
-
         # Outbound access check. Self-routing is always allowed —
         # protocol broadcasts (``EV_CHANNEL_OPENED`` / ``EV_CHANNEL_CLOSED``)
         # include the creator in their own audience so the creator's
@@ -1568,6 +1584,25 @@ class Hub:
                     current = self._inbox_pending.get(recipient_id, 0)
                     if current >= max_pending:
                         raise InboxFull(f"recipient {recipient_id!r} inbox at capacity ({current} >= {max_pending})")
+
+        # Per-sender rate limit, just before the WAL append. Protocol
+        # envelopes (acks, opens, expectation violations) bypass so the
+        # channel state machine can advance even under throttle. Runs
+        # after access / depth / inbox checks so a denied request never
+        # debits the bucket.
+        if not _is_protocol_event(envelope.event_type):
+            if envelope.sender_id in self._rate_buckets:
+                bucket = self._rate_buckets[envelope.sender_id]
+            else:
+                rate = sender_rule.limits.rate
+                bucket = make_bucket(rate.per_minute, rate.burst, self._monotonic())
+                self._rate_buckets[envelope.sender_id] = bucket
+            if bucket is not None and not bucket.consume(self._monotonic()):
+                rate = sender_rule.limits.rate
+                raise RateLimited(
+                    f"sender {sender.name!r} rate limited "
+                    f"(per_minute={rate.per_minute}, burst={rate.burst or rate.per_minute})"
+                )
 
         adapter = self._adapter_for(metadata.manifest.type, metadata.manifest.version)
 
@@ -1760,6 +1795,42 @@ class Hub:
             await endpoint.send_frame(PongFrame())
         elif isinstance(frame, ReceiptFrame):
             await self._handle_receipt(endpoint, frame)
+        elif isinstance(frame, ChunkFrame):
+            try:
+                await self.post_chunk(frame)
+            except NetworkError as exc:
+                await endpoint.send_frame(ErrorFrame(code=_error_code(exc), message=str(exc)))
+        elif isinstance(frame, RpcCallFrame):
+            await self._dispatch_rpc(endpoint, frame)
+
+    async def _dispatch_rpc(self, endpoint: LinkEndpoint, frame: RpcCallFrame) -> None:
+        """Invoke a named control-plane method on behalf of a wire client.
+
+        Methods are looked up in ``_RPC_METHODS`` (a fixed allowlist).
+        The handler is an async coroutine returning a JSON-serialisable
+        value; the result rides back in an ``RpcResultFrame``. Any
+        ``NetworkError`` becomes a structured ``error`` payload.
+        """
+        handler = _RPC_METHODS.get(frame.method)
+        if handler is None:
+            await endpoint.send_frame(
+                RpcResultFrame(
+                    request_id=frame.request_id,
+                    error={"code": "not_found", "message": f"unknown rpc method: {frame.method!r}"},
+                )
+            )
+            return
+        try:
+            result = await handler(self, endpoint, frame.args)
+        except NetworkError as exc:
+            await endpoint.send_frame(
+                RpcResultFrame(
+                    request_id=frame.request_id,
+                    error={"code": _error_code(exc), "message": str(exc)},
+                )
+            )
+            return
+        await endpoint.send_frame(RpcResultFrame(request_id=frame.request_id, result=result))
 
     async def _handle_receipt(self, endpoint: LinkEndpoint, frame: ReceiptFrame) -> None:
         """Update the per-(agent, channel) cursor on ack; nack appends
@@ -2194,3 +2265,211 @@ def _task_metadata_from_dict(data: dict[str, object]) -> TaskMetadata:
         error=str(data.get("error", "")),
         channel_id=data.get("channel_id"),  # type: ignore[arg-type]
     )
+
+
+# ── RPC method handlers ─────────────────────────────────────────────────────
+#
+# Each handler is a coroutine taking ``(hub, endpoint, args)`` and returning a
+# JSON-serialisable value. ``endpoint`` is the calling client's connection —
+# used by ``rpc_register`` to bind the new ``agent_id`` to this endpoint.
+
+
+async def _rpc_register(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    passport = Passport.from_dict(args["passport"])
+    resume = Resume.from_dict(args.get("resume") or {})
+    rule_body = args.get("rule")
+    rule = Rule.from_dict(rule_body) if rule_body is not None else None
+    skill_md = args.get("skill_md")
+    stamped = await hub.register(passport, resume, skill_md=skill_md, rule=rule)
+    assert stamped.agent_id is not None
+    hub.bind_endpoint(endpoint.endpoint_id, stamped.agent_id)
+    return {"passport": stamped.to_dict()}
+
+
+async def _rpc_unregister(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    await hub.unregister(args["agent_id"])
+    return None
+
+
+async def _rpc_get_agent(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    passport = await hub.get_agent(args["name_or_id"])
+    return {"passport": passport.to_dict()}
+
+
+async def _rpc_get_resume(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    resume = await hub.get_resume(args["agent_id"])
+    return {"resume": resume.to_dict()}
+
+
+async def _rpc_get_skill(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    skill = await hub.get_skill(args["agent_id"])
+    return {"skill_md": skill}
+
+
+async def _rpc_list_agents(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    passports = await hub.list_agents(
+        capability=args.get("capability"),
+        query=args.get("query"),
+        sort_by=args.get("sort_by"),
+        limit=int(args.get("limit", 50)),
+    )
+    return {"agents": [p.to_dict() for p in passports]}
+
+
+async def _rpc_set_resume(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    await hub.set_resume(args["agent_id"], Resume.from_dict(args["resume"]))
+    return None
+
+
+async def _rpc_set_skill(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    await hub.set_skill(args["agent_id"], args.get("skill_md"))
+    return None
+
+
+async def _rpc_set_rule(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    await hub.set_rule(args["agent_id"], Rule.from_dict(args["rule"]))
+    return None
+
+
+async def _rpc_create_channel(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    metadata = await hub.create_channel(
+        creator_id=args["creator_id"],
+        manifest_type=args["manifest_type"],
+        manifest_version=int(args.get("manifest_version", 1)),
+        participants=list(args["participants"]),
+        required_acks=args.get("required_acks"),
+        ttl=args.get("ttl"),
+        knobs=args.get("knobs"),
+        intent=args.get("intent"),
+        labels=args.get("labels"),
+    )
+    return {"channel": metadata.to_dict()}
+
+
+async def _rpc_get_channel(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    metadata = await hub.get_channel(args["channel_id"])
+    return {"channel": metadata.to_dict()}
+
+
+async def _rpc_list_channels(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    state_raw = args.get("state")
+    state = ChannelState(state_raw) if isinstance(state_raw, str) else None
+    channels = await hub.list_channels(
+        agent_id=args.get("agent_id"),
+        state=state,
+        limit=int(args.get("limit", 50)),
+    )
+    return {"channels": [m.to_dict() for m in channels]}
+
+
+async def _rpc_close_channel(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    metadata = await hub.close_channel(args["channel_id"], reason=args.get("reason", ""))
+    return {"channel": metadata.to_dict()}
+
+
+async def _rpc_read_wal(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    envelopes = await hub.read_wal(
+        args["channel_id"],
+        since=int(args.get("since", 0)),
+        until=args.get("until"),
+    )
+    return {"envelopes": [e.to_dict() for e in envelopes]}
+
+
+async def _rpc_find_envelope_by_causation(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    envelope = hub.find_envelope_by_causation(
+        args["channel_id"],
+        sender_id=args["sender_id"],
+        causation_id=args["causation_id"],
+    )
+    return {"envelope": envelope.to_dict() if envelope is not None else None}
+
+
+async def _rpc_pending_turns_for(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    turns = await hub.pending_turns_for(args["agent_id"])
+    return {
+        "turns": [
+            {"channel_id": t.channel_id, "last_envelope_id": t.last_envelope_id, "reason": t.reason} for t in turns
+        ]
+    }
+
+
+async def _rpc_can_send(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    allowed = hub.can_send(
+        args["channel_id"],
+        args["sender_id"],
+        event_type=args.get("event_type"),
+    )
+    return {"allowed": allowed}
+
+
+async def _rpc_observe_task(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    await hub.observe_task(_task_metadata_from_dict(args["metadata"]))
+    return None
+
+
+async def _rpc_get_task(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    metadata = await hub.get_task(args["task_id"])
+    return {"metadata": _task_metadata_to_dict(metadata)}
+
+
+async def _rpc_list_tasks(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> dict[str, Any]:
+    state_raw = args.get("state")
+    state = TaskState(state_raw) if isinstance(state_raw, str) else None
+    tasks = await hub.list_tasks(
+        agent_id=args.get("agent_id"),
+        channel_id=args.get("channel_id"),
+        state=state,
+        limit=int(args.get("limit", 50)),
+    )
+    return {"tasks": [_task_metadata_to_dict(t) for t in tasks]}
+
+
+async def _rpc_update_task(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    state_raw = args.get("state")
+    state = TaskState(state_raw) if isinstance(state_raw, str) else None
+    await hub.update_task(
+        args["task_id"],
+        state=state,
+        progress=args.get("progress"),
+        result=args.get("result"),
+        error=args.get("error"),
+    )
+    return None
+
+
+async def _rpc_record_observation(hub: "Hub", endpoint: LinkEndpoint, args: dict[str, Any]) -> None:
+    await hub.record_observation(
+        owner_id=args["owner_id"],
+        capability=args["capability"],
+        outcome=TaskState(args["outcome"]),
+        latency_ms=args.get("latency_ms"),
+        task_id=args.get("task_id"),
+    )
+    return None
+
+
+_RPC_METHODS: dict[str, Any] = {
+    "register": _rpc_register,
+    "unregister": _rpc_unregister,
+    "get_agent": _rpc_get_agent,
+    "get_resume": _rpc_get_resume,
+    "get_skill": _rpc_get_skill,
+    "list_agents": _rpc_list_agents,
+    "set_resume": _rpc_set_resume,
+    "set_skill": _rpc_set_skill,
+    "set_rule": _rpc_set_rule,
+    "create_channel": _rpc_create_channel,
+    "get_channel": _rpc_get_channel,
+    "list_channels": _rpc_list_channels,
+    "close_channel": _rpc_close_channel,
+    "read_wal": _rpc_read_wal,
+    "find_envelope_by_causation": _rpc_find_envelope_by_causation,
+    "pending_turns_for": _rpc_pending_turns_for,
+    "can_send": _rpc_can_send,
+    "observe_task": _rpc_observe_task,
+    "get_task": _rpc_get_task,
+    "list_tasks": _rpc_list_tasks,
+    "update_task": _rpc_update_task,
+    "record_observation": _rpc_record_observation,
+}
