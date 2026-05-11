@@ -49,7 +49,7 @@ class ViewPolicy(Protocol):
         wal: list[Envelope],
         *,
         participant_id: str,
-        session: SessionMetadata,
+        session: ChannelMetadata,
     ) -> list[BaseEvent]:
         """Convert the WAL slice this participant should see into model events.
 
@@ -66,7 +66,7 @@ class ViewPolicy(Protocol):
 
 | Policy | Behavior | Use case |
 |---|---|---|
-| `FullTranscript()` | Translate every envelope visible to `participant_id` (per `visible_to`). | Small sessions: consulting, ≤3-party discussion. |
+| `FullTranscript()` | Translate every envelope visible to `participant_id` (per `visible_to`). | Small channels: consulting, ≤3-party discussion. |
 | `WindowedSummary(recent_n=10, summary=SummarizeCompact())` | Last N visible envelopes verbatim + LLM-summarized tail of older history. Calls framework-core `CompactStrategy.compact()` for the summary. | Long conversations and discussions. |
 | `Composite([policies], merge="concat" \| "first_nonempty")` | Compose multiple policies. | Custom flows. |
 
@@ -95,7 +95,7 @@ Eligibility is computed before `ViewPolicy.project()`. The hub honors this at de
 
 When the projection is too narrow but the LLM needs older or other-speaker context, it calls a lookup tool. Two are exposed via the `context(...)` grouped tool (see [network_plugin.md](network_plugin.md)):
 
-- `context(action="search", query, scope="session"|"knowledge")` — substring + token match in V1; vector search in a follow-up
+- `context(action="search", query, scope="channel"|"knowledge")` — substring + token match in V1; vector search in a follow-up
 - `context(action="quote", speaker, recent_n)` — pull the last N envelopes from a specific peer in the session
 
 These let the LLM keep its turn projection bounded while still being able to reach into older history on demand.
@@ -104,7 +104,7 @@ These let the LLM keep its turn projection bounded while still being able to rea
 
 Layer C lives entirely in framework-core. An Agent constructed with `knowledge=KnowledgeConfig(store=..., aggregate=WorkingMemoryAggregate(...))` accumulates working memory turn over turn via the existing assembly chain. The network does not introduce a parallel mechanism; `context(action="search", scope="knowledge")` reads from the same `KnowledgeStore`.
 
-Working memory persists across sessions: what an Agent learned in session A is available in session B because both share the Agent's `KnowledgeStore`.
+Working memory persists across channels: what an Agent learned in session A is available in session B because both share the Agent's `KnowledgeStore`.
 
 `scope="knowledge"` reads the **calling agent's own** knowledge — not a shared team store, not peers' stores. Cross-agent knowledge sharing is out of scope for framework-core (post Phase 4); an agent that needs another's knowledge opens a session and asks. The tool description makes this explicit so the LLM doesn't assume "knowledge" is shared.
 

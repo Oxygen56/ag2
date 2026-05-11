@@ -78,7 +78,7 @@ class LocalLink:
 
 Streaming uses `chunk` frames carrying `(envelope_id, sender_id, audience, content_delta)`. The hub validates the sender, fans out to listed recipients (or all participants for broadcast), and does NOT persist chunks to the WAL — they are transient. Each `AgentClient` buffers chunks per envelope until the receiver opens the iterator.
 
-`Session.send_chunk(envelope_id, content_delta)` and `Session.iter_chunks(envelope_id) -> AsyncIterator[str]` are the public API. View policies do not see in-progress chunks; they project finalized envelopes only. The chunk frames are wire-level and not exposed as LLM tools.
+`Channel.send_chunk(envelope_id, content_delta)` and `Channel.iter_chunks(envelope_id) -> AsyncIterator[str]` are the public API. View policies do not see in-progress chunks; they project finalized envelopes only. The chunk frames are wire-level and not exposed as LLM tools.
 
 ## Phase 2.0 — In-process cursor + replay
 
@@ -125,10 +125,10 @@ The HTTP CRUD surface (10 endpoints, mounted at `/v1/*`) lives in `autogen/beta/
 | GET | `/v1/agents` | List with `?capability=&query=&limit=` |
 | GET | `/v1/agents/{id}` | Describe (returns identity + skill_md) |
 | PUT | `/v1/agents/{id}/rule` | Replace rule |
-| POST | `/v1/sessions` | Create session |
-| GET | `/v1/sessions/{id}` | Get metadata |
-| GET | `/v1/sessions/{id}/wal?since=&until=` | Read WAL slice |
-| POST | `/v1/sessions/{id}/close` | Close |
+| POST | `/v1/channels` | Create session |
+| GET | `/v1/channels/{id}` | Get metadata |
+| GET | `/v1/channels/{id}/wal?since=&until=` | Read WAL slice |
+| POST | `/v1/channels/{id}/close` | Close |
 | GET | `/v1/admin/health` | Liveness |
 
 `build_app(hub: Hub) -> Starlette` returns a Starlette app mountable in any larger ASGI project. `HttpServer(hub, host, port)` wraps it with uvicorn for standalone hosting. `starlette` and `uvicorn` are lazy-imported so the network package stays install-optional.

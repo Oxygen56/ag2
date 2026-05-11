@@ -4,7 +4,7 @@ The `NetworkPlugin` is what attaches an `Agent` to a `Network`. Its responsibili
 
 1. Add the 6 LLM tools to `agent.tools` as real `FunctionTool`s — visible at every tool-listing path, callable in any `Agent.ask`, not just inside notify handlers. This is the fix that lets agents **initiate** sessions, not only respond inside them.
 2. Register an assembly policy (`NetworkContextPolicy`) that injects network metadata into the prompt, refreshed lazily.
-3. Wire context dependencies (`SESSION_DEP`, `AGENT_CLIENT_DEP`, `HUB_DEP`, `TASK_DEP`) on every notify handler entry so the tools can resolve their bindings.
+3. Wire context dependencies (`CHANNEL_DEP`, `AGENT_CLIENT_DEP`, `HUB_DEP`, `TASK_DEP`) on every notify handler entry so the tools can resolve their bindings.
 
 Plugins are first-class in beta (`autogen/beta/agent.py:1234`); the network plugin uses the existing slot.
 
@@ -48,7 +48,7 @@ class NetworkPlugin(Plugin):
                 make_say_tool(client),
                 make_delegate_tool(client),
                 make_peers_tool(client),
-                make_sessions_tool(client),
+                make_channels_tool(client),
                 make_tasks_tool(client),
                 make_context_tool(client),
             ],
@@ -72,7 +72,7 @@ Active peers (M of N shown):
 - bob [coder]: backend systems, performance
 - ...
 
-Session types you can initiate: consulting, conversation, discussion
+Channel types you can initiate: consulting, conversation, discussion
 
 Currently in:
 - session <id> (discussion, 5 participants), turn 12
@@ -88,7 +88,7 @@ Active task:
 Your tools: say, delegate, peers, sessions, tasks, context.
 ```
 
-The session block is rendered when the current notify handler has a current `Session`; the task block is rendered when the agent is inside an `agent.task(...)` context (resolved via `TaskInject`). Both blocks are omitted when not applicable, so a bare-network agent just sees the peer list and tool surface.
+The session block is rendered when the current notify handler has a current `Channel`; the task block is rendered when the agent is inside an `agent.task(...)` context (resolved via `TaskInject`). Both blocks are omitted when not applicable, so a bare-network agent just sees the peer list and tool surface.
 
 Implementation outline:
 
@@ -128,23 +128,23 @@ TaskInject = Annotated["Task", Inject("ag2.task")]                  # framework-
 
 
 # autogen/beta/network/client/inject.py — network-only
-SessionInject = Annotated["Session", Inject("ag2.network.session")]
+ChannelInject = Annotated["Channel", Inject("ag2.network.session")]
 AgentClientInject = Annotated["AgentClient", Inject("ag2.network.agent_client")]
 HubInject = Annotated["Hub", Inject("ag2.network.hub")]
 ```
 
-`Agent._spawn_subtask` and the `agent.task(...)` context manager stamp the active `Task` into `context.dependencies["ag2.task"]`. The default network notify handler additionally stamps the `Session`, `AgentClient`, and `Hub` keys.
+`Agent._spawn_subtask` and the `agent.task(...)` context manager stamp the active `Task` into `context.dependencies["ag2.task"]`. The default network notify handler additionally stamps the `Channel`, `AgentClient`, and `Hub` keys.
 
 Tools that want to be both on- and off-network use the optional form:
 
 ```python
-Annotated[Session | None, Inject("ag2.network.session", default=None)]
+Annotated[Channel | None, Inject("ag2.network.session", default=None)]
 Annotated[Task | None,    Inject("ag2.task",            default=None)]
 ```
 
 **Important — type vs default:** the parameter signature is
-``session: SessionInject = None`` (default ``None``), **not**
-``session: SessionInject | None = None``. Wrapping the ``Annotated``
+``session: ChannelInject = None`` (default ``None``), **not**
+``session: ChannelInject | None = None``. Wrapping the ``Annotated``
 in ``| None`` forms a ``Union`` that hides the ``Inject`` metadata
 from ``fast_depends``, which silently leaves the parameter unresolved.
 The ``default=None`` argument inside ``Inject(...)`` already handles
@@ -164,15 +164,15 @@ async def say(
     content: str,
     *,
     audience: list[str] | None = None,
-    session_id: str | None = None,
-    session: SessionInject | None = None,
+    channel_id: str | None = None,
+    session: ChannelInject | None = None,
     client: AgentClientInject,
 ) -> str:
     """Post into a session. Defaults to the current session in handler context;
-    `session_id` overrides. Returns envelope_id.
+    `channel_id` overrides. Returns envelope_id.
 
     audience: list of agent names; None = broadcast within session.
-    Errors if no current session and no session_id is given.
+    Errors if no current session and no channel_id is given.
     """
 ```
 
@@ -188,7 +188,7 @@ async def delegate(
     capability: str | None = None,
     blocking: bool = True,
     timeout: float | None = 300,
-    session: SessionInject | None = None,
+    session: ChannelInject | None = None,
     client: AgentClientInject | None = None,
 ) -> str | dict:
     """One-shot consult: open a consulting session to `target`, run a Task,
@@ -249,24 +249,24 @@ async def sessions(
     knobs: dict | None = None,
     intent: str | None = None,
     ttl: str | int | None = None,
-    session_id: str | None = None,
+    channel_id: str | None = None,
     state: str = "active",
     client: AgentClientInject,
-    current: SessionInject | None = None,
+    current: ChannelInject | None = None,
 ) -> list[dict] | dict:
-    """Session lifecycle.
+    """Channel lifecycle.
 
     action="list":  args state="active"|"all"
-                    returns [{session_id, type, participants, state}, ...]
+                    returns [{channel_id, type, participants, state}, ...]
     action="open":  args type, target, knobs?, intent?, ttl?
-                    returns {session_id, type, participants}
-    action="info":  args session_id
-                    returns full SessionMetadata as dict, including
+                    returns {channel_id, type, participants}
+    action="info":  args channel_id
+                    returns full ChannelMetadata as dict, including
                     `manifest.expectations` so the agent can see the
                     protocol-shape contract (reply windows, turn timeouts,
                     silence thresholds, etc.) for that session
-    action="close": args session_id? (default current)
-                    returns {session_id, state, close_reason}
+    action="close": args channel_id? (default current)
+                    returns {channel_id, state, close_reason}
     """
 ```
 
@@ -340,19 +340,19 @@ async def context(
     action: Literal["search", "quote"],
     *,
     query: str | None = None,
-    scope: Literal["session", "knowledge"] = "session",
+    scope: Literal["channel", "knowledge"] = "channel",
     speaker: str | None = None,
     recent_n: int = 1,
     limit: int = 10,
-    session_id: str | None = None,
-    session: SessionInject | None = None,
+    channel_id: str | None = None,
+    session: ChannelInject | None = None,
     client: AgentClientInject,
 ) -> list[dict]:
     """Read from past content.
 
-    action="search": args query, scope="session"|"knowledge", limit=10
+    action="search": args query, scope="channel"|"knowledge", limit=10
                      returns [{sender_name, when, excerpt, envelope_id|knowledge_path}, ...]
-    action="quote":  args speaker, recent_n=1, session_id?
+    action="quote":  args speaker, recent_n=1, channel_id?
                      returns the last N envelopes from `speaker` in the session
     """
 ```
@@ -382,20 +382,28 @@ Closures capture `client` once at registration time, so the FunctionTool definit
 
 ## Workflow handoff tools
 
-When an `Agent` participates in a `workflow` session, the plugin can materialize one extra LLM tool per `ToolCalled` transition in the session's `TransitionGraph`. Each tool, when invoked by the LLM, posts an `ag2.handoff` envelope into the session; the `WorkflowAdapter` reads it and advances `expected_next_speaker`. See [workflow.md](workflow.md) for the full mechanism.
+Handoff tools are author-written, not framework-generated. The user writes a `@tool` function that returns a `Handoff(target=..., reason=...)`; the `WorkflowAdapter` reads the typed return value off the agent's local `ToolResultEvent` stream and routes the next speaker to `target`. See [workflow.md](workflow.md) for the full mechanism.
 
 ```python
-# autogen/beta/network/client/tools/handoff.py
+from autogen.beta.network import Handoff
 
-def register_workflow(client: AgentClient, graph: TransitionGraph) -> None:
-    """Materialize one LLM tool per ToolCalled transition in `graph`.
 
-    Tools are added to the agent's tool list at session-open time and
-    removed at session-close. Tool names match `ToolCalled.tool_name`.
-    """
+@tool(description="Transfer the conversation to the engineering team.")
+async def transfer_to_engineering(reason: str = "") -> Handoff:
+    return Handoff(target="eng", reason=reason)
 ```
 
-The handoff tool surface is per-session: agents only see the handoffs that exist in the workflows they're currently in. Outside an active workflow session, the tools are absent.
+For the AG2-classic `AutoPattern` shape (one selector picking among N candidates), `TransitionGraph.auto_pattern(selector_id, candidates)` returns `(graph, tools)` so the caller wires both halves in one call:
+
+```python
+graph, tools = TransitionGraph.auto_pattern(
+    selector_id="manager",
+    candidates=["eng", "sales"],
+)
+manager_agent.tools.extend(tools)
+```
+
+The handoff tool surface is per-agent: tools live on `agent.tools` for the agent's lifetime, not per-session. An agent may participate in multiple workflows; non-matching destinations fall through to the active graph's `default_target`.
 
 ## What's not on the LLM surface
 

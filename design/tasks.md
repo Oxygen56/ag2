@@ -51,7 +51,7 @@ class TaskMetadata:
     result: Any = None
     error: str = ""
     # Optional network association — set when an AgentClient mirrors this task.
-    session_id: str | None = None
+    channel_id: str | None = None
 
 
 class Task:
@@ -213,7 +213,7 @@ agent.stream            AgentClient                       Hub
    │── TaskCompleted ──────▶│── ag2.task.result ──────────▶│  state ← completed
 ```
 
-The `session_id` on the envelope is the mirror's choice: by default, the session the agent is currently handling (if any) so peers in that session see the task as part of the session's WAL. With no current session, the mirror creates a per-agent task channel.
+The `channel_id` on the envelope is the mirror's choice: by default, the session the agent is currently handling (if any) so peers in that session see the task as part of the session's WAL. With no current session, the mirror creates a per-agent task channel.
 
 ## Hub responsibilities for observed tasks
 
@@ -223,7 +223,7 @@ The hub does **not** create, assign, cancel, or retry tasks. It observes. Specif
 - **Applies task TTL.** When `expires_at` passes without a terminal event, hub emits `ag2.task.expired` and updates state to `EXPIRED`. Owner is informed via the same envelope on its inbox.
 - **Forwards task envelopes** to subscribers per the session's audience addressing.
 - **Emits `ag2.task.stalled`** when a non-terminal task has no progress event for `Rule.limits.task_stall_threshold` (default 60s). Passive signal — owner can resume by emitting another progress event; peers can react however their choreography prescribes.
-- **Cascades on session close** — non-terminal tasks tied to a closed session transition to `EXPIRED` with `reason="session_closed"` before `EV_SESSION_CLOSED` lands. The owner sees this on its stream via the mirror.
+- **Cascades on session close** — non-terminal tasks tied to a closed session transition to `EXPIRED` with `reason="session_closed"` before `EV_CHANNEL_CLOSED` lands. The owner sees this on its stream via the mirror.
 - **Records observations on terminal events.** When a terminal task envelope (`EV_TASK_RESULT` / `EV_TASK_ERROR` / `EV_TASK_EXPIRED`) lands and `TaskSpec.payload` carries a `capability` tag, the hub calls `Hub.record_observation(owner_id, capability=, outcome=, duration_ms=)` to update `Resume.observed[capability]`. Tasks without a capability tag don't update observed stats. See [identity.md](identity.md) for the resume mutation contract.
 
 There is no `Hub.create_task`. There is no `Hub.cancel_task` in V1. Cancellation, if needed, is the owner's responsibility — they call `task.fail("cancelled by request")` or `task.complete(...)` early. Phase 2.0 adds a hub-mediated cancellation request envelope (`ag2.task.cancel_request`) the owner is free to honour or ignore.

@@ -17,7 +17,7 @@ Priority = Literal["background", "normal", "urgent"]
 @dataclass(slots=True)
 class Envelope:
     envelope_id: str                           # UUID7, hub-stamped on accept
-    session_id: str
+    channel_id: str
     sender_id: str
     audience: list[str] | None                 # None = broadcast within session
     event_type: str                            # stable name, e.g. "ag2.msg.text"
@@ -66,15 +66,15 @@ V1 ships a fixed set of stable event-type names. New names are added in code, no
 | Constant | Value | Purpose |
 |---|---|---|
 | `EV_TEXT` | `ag2.msg.text` | User-content text envelope |
-| `EV_HANDOFF` | `ag2.handoff` | Tool-driven workflow transition signal; `event_data["tool"]` names the handoff tool. Read by `WorkflowAdapter`'s `ToolCalled` condition (see [workflow.md](workflow.md)). Adapter-agnostic — any future adapter that wants tool-driven transitions reads it the same way. |
-| `EV_SESSION_INVITE` | `ag2.session.invite` | Hub → recipient on session create |
-| `EV_SESSION_INVITE_ACK` | `ag2.session.invite.ack` | Recipient → hub |
-| `EV_SESSION_INVITE_REJECT` | `ag2.session.invite.reject` | Recipient → hub |
-| `EV_SESSION_OPENED` | `ag2.session.opened` | Hub broadcast on quorum reached |
-| `EV_SESSION_CLOSED` | `ag2.session.closed` | Hub broadcast on close |
-| `EV_SESSION_EXPIRED` | `ag2.session.expired` | Hub broadcast on TTL sweep |
-| `EV_SESSION_IDLE` | `ag2.session.idle` | Hub: no envelopes for `session_idle_threshold` |
-| `EV_SESSION_QUORUM_CHANGED` | `ag2.session.quorum_changed` | Hub: participant count changed in active session |
+| `EV_PACKET` | `ag2.packet` | One agent's full `Agent.ask` round, captured atomically. `event_data` carries `{routing: {...}, context_updates: {...}, body: str}`. Used by `WorkflowAdapter` to bundle routing intent (`Handoff` return value from a tool), context-variable mutations, and final body in a single envelope. |
+| `EV_CONTEXT_SET` | `ag2.context.set` | Channel-scoped context-variable mutation. `event_data` carries `{set: {...}, delete: [...]}`. Visible to every participant via `WorkflowState.context_vars` after fold. |
+| `EV_CHANNEL_INVITE` | `ag2.channel.invite` | Hub → recipient on channel create |
+| `EV_CHANNEL_INVITE_ACK` | `ag2.channel.invite.ack` | Recipient → hub |
+| `EV_CHANNEL_INVITE_REJECT` | `ag2.channel.invite.reject` | Recipient → hub |
+| `EV_CHANNEL_OPENED` | `ag2.channel.opened` | Hub broadcast on quorum reached |
+| `EV_CHANNEL_CLOSED` | `ag2.channel.closed` | Hub broadcast on close |
+| `EV_CHANNEL_EXPIRED` | `ag2.channel.expired` | Hub broadcast on TTL sweep |
+| `EV_QUORUM_CHANGED` | `ag2.channel.quorum_changed` | Hub: participant count changed in active channel |
 | `EV_TASK_STARTED` | `ag2.task.started` | Owner → observers (mirrored from agent's `TaskStarted` event) |
 | `EV_TASK_PROGRESS` | `ag2.task.progress` | Owner → observers |
 | `EV_TASK_RESULT` | `ag2.task.result` | Owner → observers, terminal |

@@ -35,7 +35,7 @@ class Hub:
         audit_retention_days: int = 30,
         clock: Callable[[], str] = _utc_now_iso,
         auth: AuthRegistry | None = None,
-        adapters: list[SessionAdapter] | None = None,
+        adapters: list[ChannelAdapter] | None = None,
     ) -> None: ...
 
     @classmethod
@@ -122,7 +122,7 @@ async def describe_network(self) -> NetworkMetadata:
 
 # ── Sessions ────────────────────────────────────────────────────────────────
 
-async def create_session(
+async def create_channel(
     self, *,
     creator_id: str,
     manifest_type: str,
@@ -133,33 +133,33 @@ async def create_session(
     knobs: dict | None = None,
     intent: str | None = None,
     labels: dict[str, str] | None = None,
-) -> SessionMetadata:
-    """Allocate session_id, write metadata, broadcast EV_SESSION_INVITE.
+) -> ChannelMetadata:
+    """Allocate channel_id, write metadata, broadcast EV_CHANNEL_INVITE.
     `intent` is stored on `metadata.labels["intent"]` if set — keeps
-    SessionMetadata stable as new fields appear."""
+    ChannelMetadata stable as new fields appear."""
 
-async def close_session(self, session_id: str, *, reason: str = "") -> SessionMetadata: ...
+async def close_channel(self, channel_id: str, *, reason: str = "") -> ChannelMetadata: ...
 
-async def get_session(self, session_id: str) -> SessionMetadata:
+async def get_channel(self, channel_id: str) -> ChannelMetadata:
     """Return metadata. Raises NotFoundError if absent."""
 
-async def list_sessions(
+async def list_channels(
     self, *,
     agent_id: str | None = None,        # filter to sessions this agent participates in
-    state: SessionState | None = None,
+    state: ChannelState | None = None,
     limit: int = 50,
-) -> list[SessionMetadata]: ...
+) -> list[ChannelMetadata]: ...
 
 async def post_envelope(self, envelope: Envelope) -> str:
     """Validate + WAL-append + fold + dispatch. Returns hub-stamped envelope_id."""
 
 async def read_wal(
-    self, session_id: str, *, since: int = 0, until: int | None = None,
+    self, channel_id: str, *, since: int = 0, until: int | None = None,
 ) -> list[Envelope]: ...
 
 def find_envelope_by_causation(
     self,
-    session_id: str,
+    channel_id: str,
     *,
     sender_id: str,
     causation_id: str,
@@ -177,7 +177,7 @@ async def pending_turns_for(self, agent_id: str) -> list[PendingTurn]:
     """Return non-terminal sessions where adapter state expects this
     agent to act but no reply has landed since the triggering envelope.
 
-    Each ``PendingTurn`` carries ``session_id``, ``last_envelope_id``,
+    Each ``PendingTurn`` carries ``channel_id``, ``last_envelope_id``,
     and ``reason`` (e.g. ``"workflow_next_speaker"``,
     ``"consulting_respondent"``). Used by the default notify handler
     on reconnect to wake up unfinished turns. Phase 2.0."""
@@ -196,7 +196,7 @@ async def get_task(self, task_id: str) -> TaskMetadata:
 async def list_tasks(
     self, *,
     agent_id: str | None = None,        # filter to tasks owned by this agent
-    session_id: str | None = None,
+    channel_id: str | None = None,
     state: TaskState | None = None,
     limit: int = 50,
 ) -> list[TaskMetadata]: ...
@@ -219,12 +219,12 @@ async def subscribe(
     self,
     subscriber_id: str,
     *,
-    session_id: str | None = None,
+    channel_id: str | None = None,
     task_id: str | None = None,
     event_types: list[str] | None = None,
     since_envelope_id: str | None = None,
 ) -> Subscription:
-    """Open a live subscription. At least one of session_id / task_id must be
+    """Open a live subscription. At least one of channel_id / task_id must be
     set. Returns a handle whose `.events()` is an async iterator. Used by
     `tasks(action="wait")` and Phase 3 WS clients reconnecting with a cursor."""
 
@@ -243,7 +243,7 @@ async def read_audit(
 
 # ── Adapter registry ────────────────────────────────────────────────────────
 
-def register_adapter(self, adapter: SessionAdapter) -> None: ...
+def register_adapter(self, adapter: ChannelAdapter) -> None: ...
 
 # ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -269,9 +269,9 @@ The hub rebuilds these from disk on `hydrate()`:
 - `_rules: dict[str, Rule]`
 - `_name_to_id: dict[str, str]` — name index
 - `_capability_index: dict[str, set[str]]` — capability → set of agent_ids
-- `_sessions: dict[str, SessionMetadata]` — by session_id
-- `_active_sessions: dict[str, SessionMetadata]` — non-terminal subset
-- `_pending_acks: dict[str, set[str]]` — session_id → set of agent_ids whose ack is still outstanding
+- `_sessions: dict[str, ChannelMetadata]` — by channel_id
+- `_active_sessions: dict[str, ChannelMetadata]` — non-terminal subset
+- `_pending_acks: dict[str, set[str]]` — channel_id → set of agent_ids whose ack is still outstanding
 - `_adapter_states: dict[str, AdapterState]` — folded state per session, invalidated on every WAL append
 - `_tasks: dict[str, TaskMetadata]` — observed (not owned) tasks
 - `_session_tasks: dict[str, set[str]]` — non-terminal task ids per session
@@ -286,20 +286,20 @@ The hub holds one `AdapterState` per active session, computed by folding WAL env
 
 ```python
 async def post_envelope(self, envelope: Envelope) -> str:
-    async with self._session_lock(envelope.session_id):
-        meta = self._sessions[envelope.session_id]
-        state = self._adapter_states[envelope.session_id]
+    async with self._session_lock(envelope.channel_id):
+        meta = self._sessions[envelope.channel_id]
+        state = self._adapter_states[envelope.channel_id]
         adapter = self._adapter_for(meta.manifest)
 
         adapter.validate_send(meta, envelope, state)              # O(1)
 
         envelope_id = await self._wal_append(envelope)
         new_state = adapter.fold(envelope, state)                 # O(1)
-        self._adapter_states[envelope.session_id] = new_state
+        self._adapter_states[envelope.channel_id] = new_state
 
         result = adapter.on_accepted(meta, envelope, new_state)   # O(1)
         if result.next_state:
-            await self._transition_session(envelope.session_id, result.next_state, result.auto_close_reason)
+            await self._transition_session(envelope.channel_id, result.next_state, result.auto_close_reason)
 
         await self._dispatch(envelope)
         return envelope_id
@@ -325,7 +325,7 @@ class _IntervalSweeper:
 | Sweeper | Default interval | What it does |
 |---|---|---|
 | `_TtlSweeper` | `ttl_sweep_interval` (30s) | Walks `_active_sessions` and `_tasks`; transitions anything past `expires_at` to `EXPIRED`; emits `ag2.session.expired` / `ag2.task.expired`; cascades open tasks under closing sessions. |
-| `_ExpectationSweeper` | `expectation_sweep_interval` (10s) | Walks `_active_sessions`; for each `SessionManifest.expectations` entry, evaluates the built-in predicate against `(metadata, AdapterState, WAL tail, now)`; on violation, applies the declared `on_violation` handler (`audit` / `warn` / `notify_session` / `hide` / `remove` / `auto_close`). Also emits `ag2.task.stalled`, `ag2.session.idle`, `ag2.peer.unreachable` / `ag2.peer.reconnected` derived from heartbeat state. |
+| `_ExpectationSweeper` | `expectation_sweep_interval` (10s) | Walks `_active_sessions`; for each `ChannelManifest.expectations` entry, evaluates the built-in predicate against `(metadata, AdapterState, WAL tail, now)`; on violation, applies the declared `on_violation` handler (`audit` / `warn` / `notify_session` / `hide` / `remove` / `auto_close`). Also emits `ag2.task.stalled`, `ag2.session.idle`, `ag2.peer.unreachable` / `ag2.peer.reconnected` derived from heartbeat state. |
 
 The framework-core `Watch` primitive is NOT used here — it is the trigger primitive for assembly/compact/aggregate inside the Agent harness, not a fleet manager. `asyncio.Task` + `asyncio.sleep` is enough; no public `Scheduler` surface.
 
@@ -343,8 +343,8 @@ Hub-cross-cutting events that don't belong on any single session's WAL — regis
 | `agent.unregistered` | `agent_id`, `name` | `unregister` |
 | `rule.changed` | `agent_id`, `version` | `set_rule` |
 | `resume.updated` | `agent_id`, `version`, `source` ("tenant" \| "observed") | `set_resume`, `record_observation` |
-| `expectation.violated` | `session_id`, `name`, `on_violation`, `applies_to` | `_ExpectationSweeper` |
-| `participant.removed` | `session_id`, `agent_id`, `reason` | `remove` violation handler |
+| `expectation.violated` | `channel_id`, `name`, `on_violation`, `applies_to` | `_ExpectationSweeper` |
+| `participant.removed` | `channel_id`, `agent_id`, `reason` | `remove` violation handler |
 | `hub.started` | `version`, `pid` | `start` |
 | `hub.stopped` | (empty) | `close` |
 
@@ -352,13 +352,13 @@ V1 ships read-only access via `Hub.read_audit(...)`. V1 has no rotation policy b
 
 ## Quorum tracking
 
-Multi-party `create_session(required_acks=N)` uses `_pending_acks[session_id]` to track outstanding acks. The set is initialized to all invitees and shrinks on every `EV_SESSION_INVITE_ACK`; on `EV_SESSION_INVITE_REJECT`, the hub recomputes whether `len(invitees) - rejects >= required_acks` is still satisfiable and either continues waiting, transitions to `ACTIVE` if the threshold is now met, or fails the handshake with `quorum_unreachable` if it isn't.
+Multi-party `create_channel(required_acks=N)` uses `_pending_acks[channel_id]` to track outstanding acks. The set is initialized to all invitees and shrinks on every `EV_CHANNEL_INVITE_ACK`; on `EV_CHANNEL_INVITE_REJECT`, the hub recomputes whether `len(invitees) - rejects >= required_acks` is still satisfiable and either continues waiting, transitions to `ACTIVE` if the threshold is now met, or fails the handshake with `quorum_unreachable` if it isn't.
 
 `_pending_acks` is rebuilt on `hydrate()` by replaying invite/ack/reject envelopes from the WAL of any `PENDING` session. It is not persisted as a separate file.
 
 ## Adapter version migration
 
-Manifests are snapshotted into `SessionMetadata.manifest` at create time. If `consulting@v1` ships and `consulting@v2` lands later, existing V1 sessions keep their V1 manifest for life — the hub looks up the adapter by `(manifest.type, manifest.version)`, and re-registering an adapter at a new `version` does not mutate any in-flight session. There is no migration tooling in V1; closed-session compaction (Phase 3) drops manifest detail along with the WAL.
+Manifests are snapshotted into `ChannelMetadata.manifest` at create time. If `consulting@v1` ships and `consulting@v2` lands later, existing V1 sessions keep their V1 manifest for life — the hub looks up the adapter by `(manifest.type, manifest.version)`, and re-registering an adapter at a new `version` does not mutate any in-flight session. There is no migration tooling in V1; closed-session compaction (Phase 3) drops manifest detail along with the WAL.
 
 ## Dispatch invariants
 

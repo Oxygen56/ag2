@@ -26,10 +26,9 @@ hub/
   registry/                             # rebuildable caches; not authoritative
     by_name.json                        # name → agent_id
     by_capability.json                  # capability → [agent_id]
-
-  sessions/
-    {session_id}/
-      metadata.json                     # SessionMetadata; includes the manifest snapshot
+  channels/
+    {channel_id}/
+      metadata.json                     # ChannelMetadata; includes the manifest snapshot
       wal.jsonl                         # append-only Envelope log
       tasks.json                        # flat index: {task_id: state}; rebuildable from tasks/
 
@@ -50,7 +49,7 @@ V2+ may add sibling top-level namespaces (`humans/`, `admins/`) when those `Netw
 
 **Cursor + nacks/overflow JSONL, no inbox subdirectories.** The WAL is the durable queue; `inbox.cursor` is the per-agent read position. Multi-bucket inbox directories (`pending/`, `received/`, `overflow/`) cost atomic-rename complexity and don't compose with at-least-once cursor replay. Failed deliveries (`nacks`) and dropped envelopes (`overflow`) get flat JSONL logs for operational visibility (`wc -l` shows depth without a directory walk) and audit replay.
 
-**Tasks at the top level.** Tasks outlive their originating session. A peer can `subscribe(task_id=...)` after the session closes. Per-session task **indexes** (`sessions/{id}/tasks.json`) preserve the "what tasks ran here" question without making the session own the task lifetime. Archiving a closed session does not orphan its tasks.
+**Tasks at the top level.** Tasks outlive their originating session. A peer can `subscribe(task_id=...)` after the session closes. Per-session task **indexes** (`channels/{id}/tasks.json`) preserve the "what tasks ran here" question without making the session own the task lifetime. Archiving a closed session does not orphan its tasks.
 
 **Audit log.** Hub-cross-cutting events (register, unregister, rule changes, expectation fires, participant removed, hub start/stop) need a durable record outside any single session's WAL. Daily-rotated JSONL is cheap and keeps a multi-day diagnostic window. The hub writes one line per event; readers consume via `Hub.read_audit(since=, until=)` (see [hub.md](hub.md)).
 
@@ -83,9 +82,9 @@ V1 uses only methods already on `main`:
 | `audit/{date}.jsonl` | Read on `read_audit(...)` | `append` only |
 | `registry/by_name.json` | Read on lookup miss | Replaced on register/unregister |
 | `registry/by_capability.json` | Read on `list_agents(capability=)` | Replaced on resume mutation |
-| `sessions/{id}/metadata.json` | Read on `hydrate()` and on demand | Replaced on every state transition |
-| `sessions/{id}/wal.jsonl` | Re-folded on `hydrate()`; `read_range` afterwards | `append` only |
-| `sessions/{id}/tasks.json` | Read on demand | Replaced when a task starts/terminates in this session |
+| `channels/{id}/metadata.json` | Read on `hydrate()` and on demand | Replaced on every state transition |
+| `channels/{id}/wal.jsonl` | Re-folded on `hydrate()`; `read_range` afterwards | `append` only |
+| `channels/{id}/tasks.json` | Read on demand | Replaced when a task starts/terminates in this session |
 | `tasks/{id}/metadata.json` | Read on `hydrate()`; cached | Replaced on every state transition |
 | `tasks/{id}/events.jsonl` | Read on full-history replay only | `append` only |
 

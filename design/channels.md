@@ -1,13 +1,13 @@
 # Sessions
 
-A `Session` is a stateful, durable, multi-turn container with a hub-enforced state machine and a pluggable adapter that defines its delivery semantics.
+A `Channel` is a stateful, durable, multi-turn container with a hub-enforced state machine and a pluggable adapter that defines its delivery semantics.
 
 ## Manifest vs adapter
 
 V1 splits the session description in two:
 
-- `SessionManifest` — **data**. Persisted with metadata. Describes what the session is.
-- `SessionAdapter` — **code**. Registered in the hub process; looked up by manifest type/version.
+- `ChannelManifest` — **data**. Persisted with metadata. Describes what the session is.
+- `ChannelAdapter` — **code**. Registered in the hub process; looked up by manifest type/version.
 
 This lets a hub in another process restore a session from disk and look up the adapter by name without import-time coupling. It also makes admin endpoints `list_manifests()` trivial (Phase 3).
 
@@ -36,7 +36,7 @@ class Expectation:
 
 
 @dataclass(slots=True)
-class SessionManifest:
+class ChannelManifest:
     type: str                                  # adapter dispatch key, e.g. "consulting"
     version: int = 1
     participants: ParticipantSchema = field(default_factory=lambda: ParticipantSchema(min=2))
@@ -46,10 +46,10 @@ class SessionManifest:
     expectations: list[Expectation] = field(default_factory=list)
 ```
 
-## Session metadata
+## Channel metadata
 
 ```python
-class SessionState(str, Enum):
+class ChannelState(str, Enum):
     PENDING = "pending"                        # invite sent, waiting on acks
     ACTIVE = "active"
     CLOSING = "closing"
@@ -72,12 +72,12 @@ class Participant:
 
 
 @dataclass(slots=True)
-class SessionMetadata:
-    session_id: str
-    manifest: SessionManifest
+class ChannelMetadata:
+    channel_id: str
+    manifest: ChannelManifest
     creator_id: str
     participants: list[Participant]
-    state: SessionState
+    state: ChannelState
     created_at: str
     expires_at: str | None = None
     closed_at: str | None = None
@@ -92,11 +92,11 @@ class SessionMetadata:
     rejected_by: list[str] = field(default_factory=list)        # agent_ids who explicitly rejected
 ```
 
-Adapter-specific knobs (e.g., `{"ordering": "round_robin"}`) live in `metadata.knobs` and are validated by the adapter's `validate_create`. They are **not** top-level fields. This keeps `SessionMetadata` stable as adapters proliferate.
+Adapter-specific knobs (e.g., `{"ordering": "round_robin"}`) live in `metadata.knobs` and are validated by the adapter's `validate_create`. They are **not** top-level fields. This keeps `ChannelMetadata` stable as adapters proliferate.
 
 `intent` (free-form one-line description, e.g. `"debate framework X adoption"`) lives in `labels["intent"]` rather than as a dedicated field — labels are the catch-all for tenant-supplied annotations and `intent` is one. The hub does not interpret it; `NetworkContextPolicy` renders it into the per-turn prompt.
 
-`pending_acks` and `rejected_by` track multi-party handshake state. They are populated at session creation, mutated on each `EV_SESSION_INVITE_ACK` / `EV_SESSION_INVITE_REJECT`, and frozen once the session transitions to `ACTIVE` (quorum reached) or fails creation (`quorum_unreachable`). On a partial reject, the hub recomputes whether `len(invitees) - len(rejected_by) >= required_acks` is still satisfiable.
+`pending_acks` and `rejected_by` track multi-party handshake state. They are populated at session creation, mutated on each `EV_CHANNEL_INVITE_ACK` / `EV_CHANNEL_INVITE_REJECT`, and frozen once the session transitions to `ACTIVE` (quorum reached) or fails creation (`quorum_unreachable`). On a partial reject, the hub recomputes whether `len(invitees) - len(rejected_by) >= required_acks` is still satisfiable.
 
 ## Adapter Protocol
 
@@ -116,14 +116,14 @@ class AdapterState(Protocol):
 class AdapterResult:
     """What an adapter wants the hub to do after accepting an envelope."""
 
-    next_state: SessionState | None = None     # transition the session, or None to leave
+    next_state: ChannelState | None = None     # transition the session, or None to leave
     auto_close_reason: str = ""                # if next_state == CLOSED
 
 
-class SessionAdapter(Protocol):
-    manifest: SessionManifest
+class ChannelAdapter(Protocol):
+    manifest: ChannelManifest
 
-    def initial_state(self, metadata: SessionMetadata) -> AdapterState:
+    def initial_state(self, metadata: ChannelMetadata) -> AdapterState:
         """Empty state for a fresh session."""
 
     def fold(self, envelope: Envelope, state: AdapterState) -> AdapterState:
@@ -133,12 +133,12 @@ class SessionAdapter(Protocol):
         `Hub.hydrate()` to rebuild state from disk.
         """
 
-    def validate_create(self, metadata: SessionMetadata) -> None:
+    def validate_create(self, metadata: ChannelMetadata) -> None:
         """Raise on invalid creation (bad participant count, missing knobs, ...)."""
 
     def validate_send(
         self,
-        metadata: SessionMetadata,
+        metadata: ChannelMetadata,
         envelope: Envelope,
         state: AdapterState,
     ) -> None:
@@ -146,7 +146,7 @@ class SessionAdapter(Protocol):
 
     def on_accepted(
         self,
-        metadata: SessionMetadata,
+        metadata: ChannelMetadata,
         envelope: Envelope,
         state: AdapterState,
     ) -> AdapterResult:
@@ -157,7 +157,7 @@ class SessionAdapter(Protocol):
 
     def default_view_policy(
         self,
-        metadata: SessionMetadata,
+        metadata: ChannelMetadata,
         participant_id: str,
     ) -> ViewPolicy:
         """Per-participant default projection for this session type."""
@@ -173,11 +173,11 @@ Adapters declare protocol-shape contracts that the hub enforces. Expectations ar
 
 | `name` | Params | Hub flags violation when |
 |---|---|---|
-| `acks_within` | `seconds` | Invitee hasn't ack'd or rejected within T after `EV_SESSION_INVITE` |
+| `acks_within` | `seconds` | Invitee hasn't ack'd or rejected within T after `EV_CHANNEL_INVITE` |
 | `reply_within` | `seconds` | A participant with envelopes addressed to them hasn't sent a response within T |
 | `turn_within` | `seconds` | When `AdapterState` says it's my turn, I don't post within T |
 | `progress_within` | `seconds` | Owner of a non-terminal task hasn't emitted a progress envelope within T |
-| `max_silence` | `seconds` | Session has had no envelopes from anyone for T |
+| `max_silence` | `seconds` | Channel has had no envelopes from anyone for T |
 | `min_participation` | `count`, `window_seconds` | Participant posts fewer than `count` envelopes per `window_seconds` |
 
 Custom evaluators (user-registered Python callables `(metadata, state, wal_tail, now) -> bool`) are a Phase 2.1 extension.
@@ -230,7 +230,7 @@ Each adapter is < 250 LOC. `notification`, `broadcast`, `auction` live in `examp
 
 `static` + `PreviousOnly` view (Phase 2) is the equivalent of a sequential pipeline: each participant sees only the prior speaker's output.
 
-## Session creation flow
+## Channel creation flow
 
 ```
 Initiator                      Hub                          Recipients
@@ -241,18 +241,18 @@ Initiator                      Hub                          Recipients
    │    knobs?, ttl?)            │                              │
    │ ──────────────────────────▶ │                              │
    │                             │  validate access + adapter   │
-   │                             │  allocate session_id (UUID7) │
+   │                             │  allocate channel_id (UUID7) │
    │                             │  initial_state               │
    │                             │  write metadata.json         │
    │                             │  open empty wal.jsonl        │
-   │                             │  ── EV_SESSION_INVITE ─────▶ │
+   │                             │  ── EV_CHANNEL_INVITE ─────▶ │
    │                             │                              │── notify()
    │                             │                              │
-   │                             │ ◀── EV_SESSION_INVITE_ACK ── │
+   │                             │ ◀── EV_CHANNEL_INVITE_ACK ── │
    │                             │  state → ACTIVE              │
-   │                             │  EV_SESSION_OPENED to all    │
+   │                             │  EV_CHANNEL_OPENED to all    │
    │                             │                              │
-   │  Session handle             │                              │
+   │  Channel handle             │                              │
    │ ◀────────────────────────── │                              │
 ```
 
@@ -264,7 +264,7 @@ Third parties register adapters explicitly:
 
 ```python
 class TournamentAdapter:
-    manifest = SessionManifest(
+    manifest = ChannelManifest(
         type="tournament",
         version=1,
         participants=ParticipantSchema(min=4, max=16),
@@ -286,8 +286,8 @@ Re-registering an existing `(type, version)` replaces the prior adapter and logs
 
 ## Invariants
 
-- A session is referenced by exactly one `SessionAdapter` for its lifetime, picked by `(manifest.type, manifest.version)` at create time.
-- Manifests are snapshotted into `SessionMetadata.manifest` at create time. Re-registering an adapter at a new `version` (e.g., `consulting@v2` after `consulting@v1`) does **not** mutate any in-flight session; existing sessions keep their original manifest for life. There is no migration tooling in V1.
+- A session is referenced by exactly one `ChannelAdapter` for its lifetime, picked by `(manifest.type, manifest.version)` at create time.
+- Manifests are snapshotted into `ChannelMetadata.manifest` at create time. Re-registering an adapter at a new `version` (e.g., `consulting@v2` after `consulting@v1`) does **not** mutate any in-flight session; existing sessions keep their original manifest for life. There is no migration tooling in V1.
 - Adapter decisions are deterministic functions of `(metadata, AdapterState)` where `AdapterState = fold(envᵢ, fold(envᵢ₋₁, ... fold(env₁, initial_state())))`.
 - The WAL is append-only. Mutating past envelopes is never allowed.
-- Closing a session is hub-initiated (`Hub.close_session` or TTL sweep) and cascades: every non-terminal task in the session transitions to `expired` (V1) before `EV_SESSION_CLOSED` is broadcast. Phase 2.0 adds `cancelled` as the cascade target.
+- Closing a session is hub-initiated (`Hub.close_channel` or TTL sweep) and cascades: every non-terminal task in the session transitions to `expired` (V1) before `EV_CHANNEL_CLOSED` is broadcast. Phase 2.0 adds `cancelled` as the cascade target.

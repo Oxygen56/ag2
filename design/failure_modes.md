@@ -10,7 +10,7 @@ This doc is the contract: what failure modes exist, what the framework does abou
 |---|---|---|
 | **Bounded waits** | Every session has `expires_at`; every task has `expires_at`. Hub TTL sweeper transitions to `EXPIRED` and emits terminal envelopes. | ✅ V1 |
 | **At-least-once delivery** | WAL is durable; receipts checkpoint `inbox.cursor`; on reconnect, hub replays from cursor. | V1: in-process exactly-once by lock. Phase 2.0: in-process redelivery + cursor. Phase 3: cross-process. |
-| **Idempotent reply send** | `Hub.find_envelope_by_causation(session_id, sender_id, causation_id)` returns the prior reply (if any); default handler checks before sending so redelivery doesn't produce duplicate replies. | Phase 2.0 |
+| **Idempotent reply send** | `Hub.find_envelope_by_causation(channel_id, sender_id, causation_id)` returns the prior reply (if any); default handler checks before sending so redelivery doesn't produce duplicate replies. | Phase 2.0 |
 | **Resume signal** | `Hub.pending_turns_for(agent_id)` returns sessions where adapter state expects this agent to act but no reply has landed; default handler calls on reconnect to wake up unfinished turns. | Phase 2.0 |
 | **Checkpoint recovery** | `Task.checkpoint(state)` persists owner-defined JSON to `tasks/{id}/checkpoint.json`; `agent.task(resume_from=task_id)` resumes from the last checkpoint. | Phase 2.0 |
 | **Idle / ack-stall signals** | `acks_within`, `reply_within`, `max_silence` expectations declared on a manifest fire `ag2.expectation.violated` envelopes (or run `audit` / `auto_close` handlers). | ✅ V1 — see `expectations.py` |
@@ -18,7 +18,7 @@ This doc is the contract: what failure modes exist, what the framework does abou
 | **Peer reachability signals** | Heartbeat-derived `peer.unreachable` / `peer.reconnected` envelopes propagated to active sessions. | Phase 3 — needs WebSocket transport. |
 | **Per-task stall signal** | `task.stalled` when no progress within a per-task threshold. | Phase 2.0 — `progress_within` expectation + per-task `last_progress_at` sweeping. |
 | **Quorum signals** | `session.quorum_changed(remaining, required)` when participant counts change in active multi-party sessions. | Phase 2.0 — N-of-M quorum tracking. |
-| **Protocol-shape enforcement** | `SessionManifest.expectations` declared by the adapter author; hub evaluates and applies declared `on_violation` handlers. | ✅ V1 |
+| **Protocol-shape enforcement** | `ChannelManifest.expectations` declared by the adapter author; hub evaluates and applies declared `on_violation` handlers. | ✅ V1 |
 | **Adapter contracts** | `validate_send` rejects malformed sends pre-WAL; `on_accepted` advances state per protocol. | ✅ V1 |
 
 ## What the agent is responsible for
@@ -35,7 +35,7 @@ This doc is the contract: what failure modes exist, what the framework does abou
 
 ### 1. Recipient never acks the invite
 
-**Symptom**: `EV_SESSION_INVITE` sent; no `EV_SESSION_INVITE_ACK` arrives.
+**Symptom**: `EV_CHANNEL_INVITE` sent; no `EV_CHANNEL_INVITE_ACK` arrives.
 
 **Framework**: `acks_within` expectation on the manifest (default 30s) → `on_violation="auto_close"` for strict adapters like `consulting`. Hub transitions session to `EXPIRED`; initiator's `await client.open(...)` raises or returns a failure handle.
 
@@ -43,7 +43,7 @@ This doc is the contract: what failure modes exist, what the framework does abou
 
 ### 2. Peer ack'd but never replies
 
-**Symptom**: Recipient ack'd `EV_SESSION_INVITE`; no content envelope follows within reasonable time.
+**Symptom**: Recipient ack'd `EV_CHANNEL_INVITE`; no content envelope follows within reasonable time.
 
 **Framework**: `reply_within` expectation on the manifest. For `consulting` (default 600s) → `auto_close`. For `conversation` (no default) → caller's `delegate(timeout=)` or `tasks(action="wait", timeout=)` wins eventually via task TTL.
 
@@ -73,11 +73,11 @@ This doc is the contract: what failure modes exist, what the framework does abou
 
 **Agent**: same reactions as #1; for owners, the agent stream sees `TaskExpired` and can record what was lost.
 
-### 6. Session expires (TTL)
+### 6. Channel expires (TTL)
 
 **Symptom**: `expires_at` passes without explicit close.
 
-**Framework**: hub emits `ag2.session.expired`; state ← `EXPIRED`. All non-terminal tasks under the session cascade to `EXPIRED` first with `reason="session_closed"`. Session is closed in the WAL.
+**Framework**: hub emits `ag2.session.expired`; state ← `EXPIRED`. All non-terminal tasks under the session cascade to `EXPIRED` first with `reason="session_closed"`. Channel is closed in the WAL.
 
 **Agent**: app code decides whether to open a fresh session, reduce scope, or surface to a human.
 
@@ -146,13 +146,13 @@ that keeps the V1 mechanism unified (one knob per behaviour) and
 prevents callers from setting per-tenant rules that look enforced but
 aren't:
 
-* `acks_within(seconds)` — invitee must ack within T after `EV_SESSION_INVITE`.
+* `acks_within(seconds)` — invitee must ack within T after `EV_CHANNEL_INVITE`.
 * `reply_within(seconds)` — addressed participant must respond within T.
 * `max_silence(seconds)` — session must see content within T.
 
 Phase 2.0 adds `turn_within`, `progress_within`, `min_participation`;
 Phase 3 adds peer reachability (which needs the WebSocket transport).
-See [sessions.md](sessions.md) for the full expectation table.
+See [channels.md](channels.md) for the full expectation table.
 
 ## What this is NOT
 
@@ -171,15 +171,15 @@ land with their producers; the constants are not exposed until then.
 |---|---|---|---|
 | Invite never ack'd | `ag2.expectation.violated(name="acks_within")`, then `ag2.session.expired` (if `auto_close`) | Hub | V1 |
 | Reply never sent | `ag2.expectation.violated(name="reply_within")` | Hub | V1 |
-| Session silent | `ag2.expectation.violated(name="max_silence")` | Hub | V1 |
-| Session expired | `ag2.session.expired` | Hub | V1 |
-| Session closed | `ag2.session.closed` | Hub | V1 |
+| Channel silent | `ag2.expectation.violated(name="max_silence")` | Hub | V1 |
+| Channel expired | `ag2.session.expired` | Hub | V1 |
+| Channel closed | `ag2.session.closed` | Hub | V1 |
 | Adapter rejected send | `ProtocolError` raised back to sender (no envelope; offending send is **not** WAL'd) | Hub | V1 |
 | Inbox overflow | `InboxFull` raised back to sender | Hub | V1 |
 | Peer disconnected | `ag2.peer.unreachable(peer_id, since)` | Hub | Phase 3 |
 | Peer reconnected | `ag2.peer.reconnected(peer_id)` | Hub | Phase 3 |
 | Task stalled | `ag2.task.stalled(task_id, last_progress_at)` | Hub | Phase 2.0 |
-| Session quorum changed | `ag2.session.quorum_changed(remaining, required)` | Hub | Phase 2.0 |
+| Channel quorum changed | `ag2.session.quorum_changed(remaining, required)` | Hub | Phase 2.0 |
 | Participant removed | `ag2.participant.removed(agent_id, reason)` | Hub | Phase 2.0 (`remove` violation handler) |
 | Reply duplicate suppressed | (no envelope; `Hub.find_envelope_by_causation` returns prior reply) | AgentClient default handler | Phase 2.0 |
 | Agent resume on reconnect | `Hub.pending_turns_for` re-fires `_process_text` against the triggering envelope | AgentClient default handler | Phase 2.0 |

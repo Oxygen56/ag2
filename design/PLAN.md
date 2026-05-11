@@ -5,8 +5,8 @@
 ## Goals (V1)
 
 - Agent registry with three-part identity: **`Passport`** (immutable id + billing) + **`Resume`** (mutable claims + observed track record) + optional **`SKILL.md`** (Anthropic-format LLM-facing usage doc). Discovery returns different slices for `find` vs `describe`.
-- Four built-in session types (`consulting`, `conversation`, `discussion`, `workflow`) plus an extensible `SessionAdapter` Protocol — `workflow` carries declarative `Transition` graphs for orchestrated flows (see [workflow.md](workflow.md))
-- `SessionManifest.expectations` — declarative protocol-shape contracts the hub enforces with passive `on_violation` handlers
+- Four built-in session types (`consulting`, `conversation`, `discussion`, `workflow`) plus an extensible `ChannelAdapter` Protocol — `workflow` carries declarative `Transition` graphs for orchestrated flows (see [workflow.md](workflow.md))
+- `ChannelManifest.expectations` — declarative protocol-shape contracts the hub enforces with passive `on_violation` handlers
 - Per-tenant rules: `access` + `limits` (transforms deferred to Phase 3). Per-tenant failure-mode thresholds dropped from V1: peer reachability needs the WebSocket transport (Phase 3); session-idle is covered by the manifest-level `max_silence` expectation; per-task stall surfacing is Phase 2.
 - **Task as a framework-core primitive** (`autogen/beta/task.py`) — any Agent can wrap work in a trackable lifecycle, with or without a hub. The network is one observer.
 - Two view policies (`FullTranscript`, `WindowedSummary`) — `Composite` deferred to Phase 2
@@ -36,13 +36,13 @@
 - Discussion `dynamic` and `static` ordering modes — V1 ships round_robin only (Phase 2.1)
 - Streaming `chunk` frames at the wire layer — V1 is text-only envelopes (Phase 2.1)
 - Rate limiter token bucket — V1 honors `delegation_depth` and concurrency caps but skips per-minute throttle (Phase 2.1)
-- `allowed_events` field on `SessionManifest` — removed entirely (was never validated)
+- `allowed_events` field on `ChannelManifest` — removed entirely (was never validated)
 
 Everything in this list is a later-phase or post Phase 4 concern. Framework-core V1 always works without it.
 
 ## Core principles
 
-1. **Sessions are protocols, not flat channels.** Every Agent-to-Agent exchange happens inside a `Session` with a defined type and adapter. Adapters define the choreography (or orchestration, in `workflow`'s case); participants follow it. The hub is never the orchestrator — orchestration logic lives in the adapter's pure `on_accepted` method, derived from folded state.
+1. **Sessions are protocols, not flat channels.** Every Agent-to-Agent exchange happens inside a `Channel` with a defined type and adapter. Adapters define the choreography (or orchestration, in `workflow`'s case); participants follow it. The hub is never the orchestrator — orchestration logic lives in the adapter's pure `on_accepted` method, derived from folded state.
 
 2. **Adapters are stateless.** Every decision derives from session metadata plus a per-session `AdapterState` folded from the WAL. The hub `hydrate()`s state from disk on restart by re-folding. `validate_send` and `on_accepted` are O(1), not O(WAL).
 
@@ -97,7 +97,7 @@ Each layer is replaceable without disturbing the others.
 ```
 L1  Transport         Link + frames
 L2  Routing           Hub + WAL + dispatch + adapter state cache
-L3  Choreography      SessionManifest (data) + SessionAdapter (code)
+L3  Choreography      ChannelManifest (data) + ChannelAdapter (code)
 L4  Context           ViewPolicy + recall/quote
 L5  Identity & Trust  Passport + Resume + SKILL.md + Rule + Auth
 L6  Bridge            NetworkClient impls (AgentClient = V1; HumanClient, AdminClient later)
@@ -121,11 +121,11 @@ autogen/beta/network/
 ├── identity.py                       Passport, Resume, ResumeExample, ObservedStat,
 │                                     CostProfile, AuthBlock, AgentRuntime
 ├── envelope.py                       Envelope, EV_* constants, Priority
-├── session.py                        SessionMetadata, SessionManifest,
+├── session.py                        ChannelMetadata, ChannelManifest,
 │                                     Expectation, ParticipantSchema,
-│                                     Participant, ParticipantRole, SessionState
+│                                     Participant, ParticipantRole, ChannelState
 ├── rule.py                           Rule, AccessBlock, LimitsBlock,
-│                                     SessionTypeAccess, RateBlock, InboxBlock
+│                                     ChannelTypeAccess, RateBlock, InboxBlock
 ├── transitions.py                    Transition, TransitionTarget Protocol + 5 V1
 │                                     concretes, TransitionCondition Protocol + 3
 │                                     V1 concretes, TransitionGraph (+ dumps/loads
@@ -134,7 +134,7 @@ autogen/beta/network/
 ├── auth.py                           AuthAdapter, NoAuth, AuthRegistry
 ├── adapters/
 │   ├── __init__.py
-│   ├── base.py                       SessionAdapter Protocol, AdapterState, AdapterResult
+│   ├── base.py                       ChannelAdapter Protocol, AdapterState, AdapterResult
 │   ├── consulting.py
 │   ├── conversation.py
 │   ├── discussion.py
@@ -160,11 +160,11 @@ autogen/beta/network/
 │   ├── network_client.py             NetworkClient Protocol
 │   ├── hub_client.py                 HubClient
 │   ├── agent_client.py               AgentClient
-│   ├── session.py                    Session client handle
+│   ├── session.py                    Channel client handle
 │   ├── task.py                       Task client handle
 │   ├── handlers.py                   default notify handlers (decomposed hooks)
 │   ├── plugin.py                     NetworkPlugin, NetworkContextPolicy
-│   ├── inject.py                     SessionInject, AgentClientInject, HubInject, TaskInject
+│   ├── inject.py                     ChannelInject, AgentClientInject, HubInject, TaskInject
 │   ├── skill_render.py               SKILL.md frontmatter parser + fallback renderer
 │   └── tools/
 │       ├── __init__.py
@@ -176,7 +176,7 @@ autogen/beta/network/
 │       ├── context.py
 │       └── handoff.py                Materializes one tool per ToolCalled
 │                                     transition in a workflow's graph (M4)
-└── policies.py                       qualified-key constants (SESSION_DEP, AGENT_CLIENT_DEP, HUB_DEP, TASK_DEP)
+└── policies.py                       qualified-key constants (CHANNEL_DEP, AGENT_CLIENT_DEP, HUB_DEP, TASK_DEP)
 ```
 
 ## Phases
@@ -223,10 +223,10 @@ First end-to-end LLM-driven session.
 
 - `adapters/base.py`, `adapters/consulting.py` (default expectations declared but only `auto_close` handler wired; full expectation sweeper arrives in M3)
 - `views/base.py`, `views/builtin.py` — `FullTranscript` only
-- `client/session.py` (Session client handle), `client/task.py` (Task client handle)
+- `client/session.py` (Channel client handle), `client/task.py` (Task client handle)
 - `task_mirror.py` — bridges agent's `Task*` events to `Hub.observe_task`; **`record_observation` deferred to M3**
-- `client/handlers.py` — default notify handler with DI stamping (`SESSION_DEP`, `AGENT_CLIENT_DEP`, `HUB_DEP`, `TASK_DEP`)
-- `client/inject.py` — `SessionInject`, `AgentClientInject`, `HubInject`, `TaskInject`
+- `client/handlers.py` — default notify handler with DI stamping (`CHANNEL_DEP`, `AGENT_CLIENT_DEP`, `HUB_DEP`, `TASK_DEP`)
+- `client/inject.py` — `ChannelInject`, `AgentClientInject`, `HubInject`, `TaskInject`
 - `client/plugin.py` — `NetworkPlugin` + `NetworkContextPolicy` rendering peer list + active session into the prompt prefix
 - `client/tools/say.py`, `client/tools/delegate.py` — only the 2 flat tools
 - `hub/sweepers.py` — `_TtlSweeper` only (cascades task expiry on session close)
@@ -235,7 +235,7 @@ First end-to-end LLM-driven session.
 
 **Design refinements during M2 (deviations from the original plan):**
 - `NotifyFrame` stamps `recipient_id` per-delivery — the hub iterates per-recipient anyway, and stamping the target lets `HubClient` demux directly without re-walking session participants. Required so broadcasts (`audience=None`) route correctly when one connection hosts multiple identities.
-- DI inject annotations use `Annotated[Any, Inject(...)]` rather than the concrete classes — Pydantic (used by the `tool` decorator's signature schema) cannot generate a JSON schema for `Session` / `AgentClient` / `Hub` (non-Pydantic types). Type precision is lost, but these injects never appear in the LLM-facing parameter surface (they resolve from `context.dependencies`).
+- DI inject annotations use `Annotated[Any, Inject(...)]` rather than the concrete classes — Pydantic (used by the `tool` decorator's signature schema) cannot generate a JSON schema for `Channel` / `AgentClient` / `Hub` (non-Pydantic types). Type precision is lost, but these injects never appear in the LLM-facing parameter surface (they resolve from `context.dependencies`).
 - Default notify handler does an adapter-driven "can I respond?" probe (`adapter.validate_send` with self as sender) before engaging the LLM. Prevents the consulting initiator from auto-firing a second LLM turn when the respondent's reply lands on its inbox.
 - Consulting adapter returns `next_state=CLOSED` directly (skipping the transitional `CLOSING` state). M2 has no async cleanup phase between CLOSING → CLOSED; the transitional state is reserved for future adapters that need a quiescence window.
 - Adapter state cache **O(1) benchmark deferred to M3** — consulting is 1Q1R (max 2 turns), so a "1000-turn" benchmark is meaningful only with the `discussion` adapter.
@@ -253,8 +253,8 @@ Full V1 surface. Landed as 5 internal cuts under one milestone commit.
 - **Cut 3.5** — 4 grouped LLM tools: `client/tools/peers.py`, `client/tools/sessions.py`, `client/tools/tasks.py`, `client/tools/context.py`. Wired into `NetworkPlugin` so every registered Agent gets the full surface (2 flat + 4 grouped = 6 tools).
 
 **Design refinements during M3 (deviations and bug fixes):**
-- `_transition_session` now releases dangling `_session_open_waiters` futures when the sweeper auto-closes a `PENDING` session. Previously `create_session` would block on the waiter until `invite_ack_timeout` even after out-of-band closure (e.g. via the `acks_within(auto_close)` expectation).
-- `SessionInject | None = None` silently bypassed `fast_depends` injection — wrapping the `Annotated` in a `Union` hides the `Inject` metadata so the param was never resolved. Latent in M2's `say`/`delegate` (M2 tests went through `Agent.ask`, never through direct `tool(event, context)` dispatch). Pattern is now `session: SessionInject = None` (no Union); fixed in all 6 tools and documented in `network_plugin.md`.
+- `_transition_session` now releases dangling `_session_open_waiters` futures when the sweeper auto-closes a `PENDING` session. Previously `create_channel` would block on the waiter until `invite_ack_timeout` even after out-of-band closure (e.g. via the `acks_within(auto_close)` expectation).
+- `ChannelInject | None = None` silently bypassed `fast_depends` injection — wrapping the `Annotated` in a `Union` hides the `Inject` metadata so the param was never resolved. Latent in M2's `say`/`delegate` (M2 tests went through `Agent.ask`, never through direct `tool(event, context)` dispatch). Pattern is now `session: ChannelInject = None` (no Union); fixed in all 6 tools and documented in `network_plugin.md`.
 - `_ScriptedConfig` test helper added in `test/beta/network/_helpers.py` because `autogen.beta.testing.TestConfig` resets its iterator on every `create()`, so a single agent keeps replaying its first scripted reply across multiple turns. Multi-turn LLM-driven adapter tests need persistent scripts; this wrapper feeds one shared cursor across all clients it produces.
 - Hydrate scale test ships at 100 sessions × 100 envelopes (10k envelopes total, ~1.6s including the discussion variant) rather than the 100 × 1000 (100k envelopes, ~10s populate) called out in the original plan. Hydrate itself stays sub-second even at the larger scale; the constraint is populate write throughput, which is irrelevant to the correctness contract being tested. Bumping `ENVELOPES_PER_SESSION` in `test_m3_hydrate_scale.py` runs the full sweep locally.
 - Adapter state cache O(1) benchmark (deferred from M2) is **deferred again to Phase 2**'s perf-regression suite. The hydrate scale test exercises folding correctness; perf is a separate concern.
@@ -276,7 +276,7 @@ The orchestrator surface — successor for AG2-classic's `GroupChat` + `Handoffs
 - `TransitionTarget.resolve` and `TransitionCondition.evaluate` deliberately take only `(state, envelope)` — no metadata. `WorkflowState` carries `participant_order` (for `RoundRobinTarget`) and `creator_id` (for `RevertToInitiatorTarget`) so transitions can be evaluated inside `WorkflowAdapter.fold`, which has no metadata access. Doc previously hinted at `(metadata, state, envelope)` — workflow.md will follow up.
 - Handoff tools are scoped per-agent (registered onto `agent.tools`) rather than per-session. If an agent joins multiple workflows, the union of tools is fine: each tool emits on the *current* session, and non-matching adapters fall through to `default_target`. Per-session scoping is Phase 4 (on-demand) once we have a clean reason to need it.
 - `WorkflowState.graph_data` stores the JSON-friendly `to_dict()` form. `fold` deserialises on each call (cheap; the graph is small and bounded). Caching the deserialised graph on the adapter would tie state to the adapter instance, which violates the stateless-adapter principle.
-- `WorkflowGraph.sequence(steps)` sets `max_turns=len(steps)` so the pipeline terminates cleanly after the last step posts. The exit criterion's "triage closes via TerminateTarget" is exercised in tests via `hub.close_session(...)` (deterministic) rather than waiting on the LLM to call `sessions(action="close")`.
+- `WorkflowGraph.sequence(steps)` sets `max_turns=len(steps)` so the pipeline terminates cleanly after the last step posts. The exit criterion's "triage closes via TerminateTarget" is exercised in tests via `hub.close_channel(...)` (deterministic) rather than waiting on the LLM to call `sessions(action="close")`.
 
 Exit: ✅ Validated by 26 in-tree integration tests in `test/beta/network/test_m4_workflow.py` (4 patterns + Hub.hydrate recovery + serialization round-trip + registry extension + handoff tool dispatch) and 1 anthropic smoke test in `test/beta/providers/anthropic/test_workflow_smoke.py` proving the full exit criterion against real `claude-haiku-4-5`: triage's LLM autonomously calls `transfer_to_eng` → eng's notify handler engages eng's LLM with the synthesised handoff prompt → eng's reply rotates control back to triage via `FromSpeaker(eng) → RevertToInitiatorTarget` → workflow state survives a mid-flow `Hub.hydrate()` → triage closes the session.
 
@@ -299,7 +299,7 @@ Phase 2.0 closes that gap with **primitives, not a system**. Each item is a meth
 Beta suite total: **1637 passing**, +44 from V1 baseline, zero regressions across the 5 implementation commits.
 
 **Durability primitives:**
-- `Hub.find_envelope_by_causation(session_id, *, sender_id, causation_id) -> Envelope | None` — idempotency query. Default handler checks before sending replies; redelivery doesn't produce duplicates. Index rebuilt by walking WAL on `hydrate()`.
+- `Hub.find_envelope_by_causation(channel_id, *, sender_id, causation_id) -> Envelope | None` — idempotency query. Default handler checks before sending replies; redelivery doesn't produce duplicates. Index rebuilt by walking WAL on `hydrate()`.
 - `Hub.pending_turns_for(agent_id) -> list[PendingTurn]` — wake-up query. Returns sessions where adapter state expects this agent to act but no reply has landed. Default handler calls on reconnect and re-runs the existing `_process_text` path against the triggering envelope. **Same code path as live notifies** — no resume-specific branch in user-visible code.
 - `HubClient.attach(agent, name=...)` + `AgentClient.resume_pending_turns()` — reconnect to an existing identity by name and re-fire the registered handler against any unfinished triggers.
 - `Task.checkpoint(state: dict)` — opt-in framework-core primitive. Persists JSON to `tasks/{id}/checkpoint.json` via the supplied `CheckpointStore`. `agent.task(resume_from=task_id)` reads it on construction. The owner chooses what to checkpoint and when; the framework provides storage.
@@ -309,7 +309,7 @@ Beta suite total: **1637 passing**, +44 from V1 baseline, zero regressions acros
 
 **Liveness expectations** (registered through the existing `register_expectation_evaluator` registry — no new infrastructure):
 - 3 evaluators: `turn_within`, `progress_within`, `min_participation`
-- 3 violation handlers: `warn`, `hide`, `remove`. `hide` is in-memory; `remove` persists to `sessions/{id}/removed.json` so the bar survives hub restart.
+- 3 violation handlers: `warn`, `hide`, `remove`. `hide` is in-memory; `remove` persists to `channels/{id}/removed.json` so the bar survives hub restart.
 
 **Other primitives:**
 - `TaskState.CANCELLED` + `Task.cancel(reason)` — owner-driven; emits `TaskCancelled`. `EV_TASK_CANCELLED` mirrors terminal state; `ag2.task.cancel_request` is the peer-side ask (owner free to honour or ignore). `tasks(action="cancel", task_id, reason)` LLM verb posts the request envelope.
@@ -350,15 +350,15 @@ Phase 3 lands as **three sequential milestones** under the same additive-merge r
 After M1+M2+M3: beta suite **1691 passing, zero regressions** (231 in `test/beta/network/`), +54 from Phase 2.0 baseline.
 
 Item-level detail:
-- ✅ **Streaming `chunk` frames + `Session.send_chunk` / `Session.iter_chunks`** (M1) — `ChunkFrame` is a new wire frame; chunks are ephemeral (no WAL append) and reference a parent envelope id. Hub fans out per-recipient using the same audience/access path as `NotifyFrame`. Sender-monotonic sequence numbers per parent envelope. `ChunkSubscription` on the client-side demuxes by `(session_id, parent_envelope_id)` so concurrent streams to the same agent stay isolated.
+- ✅ **Streaming `chunk` frames + `Channel.send_chunk` / `Channel.iter_chunks`** (M1) — `ChunkFrame` is a new wire frame; chunks are ephemeral (no WAL append) and reference a parent envelope id. Hub fans out per-recipient using the same audience/access path as `NotifyFrame`. Sender-monotonic sequence numbers per parent envelope. `ChunkSubscription` on the client-side demuxes by `(channel_id, parent_envelope_id)` so concurrent streams to the same agent stay isolated.
 - ✅ **Rate limiter token bucket** (M1) — per-sender token bucket in `hub/rate_limiter.py`. Wired into `Hub.post_envelope` between the delegation-depth check and the WAL append; substantive events only (protocol envelopes bypass so the session machine never deadlocks under throttle). `LimitsBlock.rate` activates it; `per_minute=0` (V1 default) skips entirely. `set_rule` invalidates the cached bucket; `unregister` drops it. Hub takes an optional `monotonic_clock` constructor arg for deterministic testing.
 - ✅ `AgentClient.add_send_hook(callable)` / `add_receive_hook(callable)` (M1) — two hook points for tenant-side per-envelope logic. Replaces the prior 4-stage `TransformPipeline` design; the stdlib of named transforms (`redact_pii`, `truncate_long_content`, `stamp_audit_header`) lives in `examples/`, not framework-core. Hooks return `Envelope` to continue or `None` to drop; first `None` short-circuits.
 - ✅ `WsLink` (WebSocket transport) (M2) — same `Link` Protocol surface as `LocalLink`; JSON-encoded frames over `websockets.asyncio`. New module `transport/ws.py` with `WsLink`/`WsLinkClient`/`WsLinkEndpoint` + `serve_ws(hub)` async-context-manager server. `HubClient._ensure_connected` is now async so wire transports can await connect; `LocalLinkClient.open()` stays a no-op so in-process callers see no behaviour change.
-- ✅ HTTP CRUD surface (10 endpoints) via Starlette (M2) — `make_http_app(hub)` returns an ASGI app. Routes: register / list_agents / get_agent / unregister / create_session / list_sessions / get_session / close_session / post_envelope / read_wal. Pure-ASGI auth middleware (not `BaseHTTPMiddleware` — that breaks under `httpx.ASGITransport`). Auth uses the passport's declared `AuthBlock.scheme` so a mixed `NoAuth + ApiKeyAuth` registry isn't a backdoor for ApiKeyAuth-tagged identities.
+- ✅ HTTP CRUD surface (10 endpoints) via Starlette (M2) — `make_http_app(hub)` returns an ASGI app. Routes: register / list_agents / get_agent / unregister / create_channel / list_channels / get_channel / close_channel / post_envelope / read_wal. Pure-ASGI auth middleware (not `BaseHTTPMiddleware` — that breaks under `httpx.ASGITransport`). Auth uses the passport's declared `AuthBlock.scheme` so a mixed `NoAuth + ApiKeyAuth` registry isn't a backdoor for ApiKeyAuth-tagged identities.
 - ✅ `ApiKeyAuth` adapter (M2) — `AuthAdapter` impl in `auth.py`. Static `keys: Mapping[str, str]` or dynamic `resolver: Callable`. Constant-time compare via `hmac.compare_digest`. Fails closed on unknown identity.
 - **Cut 3.1 — Receipt + cursor + Hello replay** (M3) — `ReceiptFrame` already exists in the vocabulary; this cut wires it end-to-end. Hub handles `ack`/`nack` in `_dispatch_frame`, persists a per-agent `inbox.cursor` write-through (one tiny JSON file per receipt — fsync pressure is negligible at chat-style envelope rates; revisit only if a real workload shows otherwise). On `HelloFrame` reconnect over a wire transport, hub replays unacked notifies past the cursor as fresh `NotifyFrame`s; `find_envelope_by_causation` makes redelivery idempotent. Default handler emits a `ReceiptFrame(status="ack")` after `_process_text` returns (or after the dedup short-circuit). Receipts are wired everywhere for code-path uniformity, but `LocalLink` has no reconnect event so replay is exercised on `WsLink` only. **Out of scope:** `SubscribeFrame.since_envelope_id` replay — the subscribe/event surface isn't a load-bearing client concern yet, and Hello-driven replay covers the resume story. Re-open when subscribe semantics actually grow.
 - **Cut 3.2 — `NetworkChangedFrame` + `HubClient` peer cache** (M3) — peer/capability lookups become real round-trips over the wire. New `NetworkChangedFrame(kind="agent_registered" | "agent_unregistered" | "resume_set" | "skill_set")` carrying just the affected `agent_id`. Hub broadcasts to all attached endpoints on identity mutation. `HubClient` gains a small TTL'd cache around `list_agents` / `get_resume` / `get_skill` and invalidates on inbound `NetworkChangedFrame`. `NetworkContextPolicy` is **not** touched — today it renders a static `"You are <name>"` prefix and does not depend on peer state. If we later grow the policy to inject a peer list into the prefix, the cache it consumes is the one already on `HubClient`.
-- **Cut 3.3 — `dispatch_audience` adapter hook** (M3) — optional `SessionAdapter.dispatch_audience(envelope, metadata, state) -> list[str] | None` returning a narrowed audience (`None` keeps the current default — `envelope.audience` or all non-sender). `Hub._dispatch` consults it before the access-rule loop. `WorkflowAdapter` overrides to return `[expected_next_speaker]` for `EV_TEXT` / `EV_HANDOFF` so workflows don't broadcast a turn that only one peer needs to see. Other adapters (`consulting`, `conversation`, `discussion`) keep the default — broadcast semantics are correct for them.
+- **Cut 3.3 — `dispatch_audience` adapter hook** (M3) — optional `ChannelAdapter.dispatch_audience(envelope, metadata, state) -> list[str] | None` returning a narrowed audience (`None` keeps the current default — `envelope.audience` or all non-sender). `Hub._dispatch` consults it before the access-rule loop. `WorkflowAdapter` overrides to return `[expected_next_speaker]` for `EV_TEXT` / `EV_HANDOFF` so workflows don't broadcast a turn that only one peer needs to see. Other adapters (`consulting`, `conversation`, `discussion`) keep the default — broadcast semantics are correct for them.
 
 ### Phase 4 — On-demand
 
@@ -396,7 +396,7 @@ Read in this order on first pass; the docs are otherwise standalone.
 
 - [identity.md](identity.md) — `Passport`, `Resume`, `SKILL.md`, `AuthBlock`, registration, `NoAuth` / `ApiKeyAuth`
 - [envelope.md](envelope.md) — `Envelope`, event types, `audience` addressing
-- [sessions.md](sessions.md) — `SessionManifest`, `SessionAdapter`, V1 adapters
+- [channels.md](channels.md) — `ChannelManifest`, `ChannelAdapter`, V1 adapters
 - [workflow.md](workflow.md) — `WorkflowAdapter`, `Transition` vocabulary, orchestrated flows
 - [views.md](views.md) — `ViewPolicy`, V1 built-ins
 - [tasks.md](tasks.md) — Task as framework-core primitive; network as observer
@@ -469,7 +469,7 @@ session = await clients[0].open(
 # in AdapterState. The next speaker's notify handler:
 #   1. Reads WAL up to the current envelope.
 #   2. Calls WindowedSummary(recent_n=10).project(...). Bounded ~8K tokens.
-#   3. Stamps SESSION_DEP / AGENT_CLIENT_DEP / HUB_DEP / TASK_DEP.
+#   3. Stamps CHANNEL_DEP / AGENT_CLIENT_DEP / HUB_DEP / TASK_DEP.
 #   4. Calls agent.ask(*projection, current_envelope) — verbs already on
 #      agent.tools from registration.
 #   5. Posts the reply via `say(...)` from inside the LLM, which the tool
@@ -481,7 +481,7 @@ session = await clients[0].open(
 # WindowedSummary skips it (visible_to() returns False).
 #
 # carol calls a verb to look back:
-#   context(action="search", query="alice cost argument", scope="session")
+#   context(action="search", query="alice cost argument", scope="channel")
 # Returns up to 10 excerpt dicts.
 #
 # Each Agent's KnowledgeStore accumulates working memory across this session

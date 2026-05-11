@@ -1,6 +1,6 @@
 # Workflow
 
-`WorkflowAdapter` is the Network's answer to AG2-classic's `GroupChat` + `Handoffs` + `AfterWork` triad. It is one more `SessionAdapter`: a flow whose next-speaker is determined by a declarative `TransitionGraph` over folded state.
+`WorkflowAdapter` is the Network's answer to AG2-classic's `GroupChat` + `Handoffs` + `AfterWork` triad. It is one more `ChannelAdapter`: a flow whose next-speaker is determined by a declarative `TransitionGraph` over folded state.
 
 ## Why a separate adapter
 
@@ -18,7 +18,7 @@ class TransitionTarget(Protocol):
 
     Takes only ``(state, envelope)``. ``WorkflowState`` carries
     ``participant_order`` and ``creator_id`` (snapshotted at
-    ``initial_state``) so resolvers don't need ``SessionMetadata`` —
+    ``initial_state``) so resolvers don't need ``ChannelMetadata`` —
     ``WorkflowAdapter.fold`` runs them in a context that has no
     metadata access.
     """
@@ -128,7 +128,7 @@ class WorkflowAdapter:
     """
 
     def __init__(self) -> None:
-        self.manifest = SessionManifest(
+        self.manifest = ChannelManifest(
             type=WORKFLOW_TYPE,
             version=1,
             participants=ParticipantSchema(min=2),
@@ -147,7 +147,7 @@ class WorkflowAdapter:
         return WorkflowState(expected_next_speaker=graph.initial_speaker)
 
     def fold(self, envelope, state):
-        # Session-protocol and task envelopes don't advance turns.
+        # Channel-protocol and task envelopes don't advance turns.
         # ag2.handoff and ag2.msg.text envelopes update last_speaker_id
         # and turn_count; on_accepted then advances expected_next_speaker.
         ...
@@ -155,17 +155,17 @@ class WorkflowAdapter:
     def validate_send(self, metadata, envelope, state):
         if state.expected_next_speaker and envelope.sender_id != state.expected_next_speaker:
             raise ProtocolError(
-                f"workflow {metadata.session_id!r} expects "
+                f"workflow {metadata.channel_id!r} expects "
                 f"{state.expected_next_speaker!r} to speak, got {envelope.sender_id!r}"
             )
 
     def on_accepted(self, metadata, envelope, state):
         graph = TransitionGraph.loads(state.graph_data)
         if graph.max_turns is not None and state.turn_count >= graph.max_turns:
-            return AdapterResult(next_state=SessionState.CLOSED,
+            return AdapterResult(next_state=ChannelState.CLOSED,
                                  auto_close_reason="max_turns")
         if state.expected_next_speaker is None:
-            return AdapterResult(next_state=SessionState.CLOSED,
+            return AdapterResult(next_state=ChannelState.CLOSED,
                                  auto_close_reason=state.pending_close_reason)
         return AdapterResult()
 
@@ -187,31 +187,37 @@ The adapter is stateless and pure. All state lives in `WorkflowState`, folded fr
 2. Each participant's notify handler calls `adapter.validate_send` for itself before engaging the LLM.
 3. Only the agent matching `state.expected_next_speaker` survives the gate; everyone else's handler is a no-op.
 
-Per-recipient routing (stamping `audience=[expected_next_speaker]` on outbound dispatch) is a Phase 3 optimization that adds a `dispatch_audience` hook to the `SessionAdapter` Protocol. Not on the M4 critical path — broadcast cost is negligible at <20 participants.
+Per-recipient routing (stamping `audience=[expected_next_speaker]` on outbound dispatch) is a Phase 3 optimization that adds a `dispatch_audience` hook to the `ChannelAdapter` Protocol. Not on the M4 critical path — broadcast cost is negligible at <20 participants.
 
 ## LLM-driven handoffs
 
-The `OnCondition`-style "LLM picks the transition" pattern collapses to **one tool per `ToolCalled` transition**. `NetworkPlugin.register_workflow(graph)` materializes those tools and attaches them to `agent.tools` on registration:
+The `OnCondition`-style "LLM picks the transition" pattern collapses to **one tool per next-speaker option**. Users author the tools directly — the framework reads the typed return value off the agent's local `ToolResultEvent` stream and routes accordingly:
 
 ```python
+from autogen.beta.network import Handoff
+
+
 @tool(description="Transfer the conversation to the engineering team.")
-async def transfer_to_engineering(
-    reason: str,
-    session: SessionInject,
-) -> str:
-    await session.send(
-        content=f"[handoff] {reason}",
-        event_type="ag2.handoff",
-        event_data={"tool": "transfer_to_engineering"},
-    )
-    return "handoff posted"
+async def transfer_to_engineering(reason: str = "") -> Handoff:
+    return Handoff(target="eng", reason=reason)
 ```
 
-The adapter's `fold` reads `event_type=="ag2.handoff"`, the `ToolCalled("transfer_to_engineering")` condition fires in `on_accepted`, and `state.expected_next_speaker` advances. The LLM never sees `expected_next_speaker` directly — it sees a button labeled "transfer," and the protocol does the rest. **Handoffs are a UX over the choreography.**
+The `WorkflowAdapter` builds an `EV_PACKET` envelope per `Agent.ask` round, embedding the `Handoff` return value in `routing.target`. `fold` reads the packet, advances `state.expected_next_speaker` to the named target, and the dispatch path narrows to that recipient. The LLM never sees `expected_next_speaker` directly — it sees a button labeled "transfer," and the protocol does the rest. **Handoffs are a UX over the choreography.**
+
+For the `AutoPattern` shape (one selector picking among N candidates), `TransitionGraph.auto_pattern(selector_id, candidates)` returns `(graph, tools)` so the caller wires both ends in a single shot:
+
+```python
+graph, tools = TransitionGraph.auto_pattern(
+    selector_id="manager",
+    candidates=["eng", "sales"],
+)
+manager_agent.tools.extend(tools)
+await client.open(type="workflow", knobs={"graph": graph.dumps()})
+```
 
 `OnContextCondition`-style handoffs (no LLM) become `Transition(when=ContextExpr(...), then=...)` once Phase 2.1 ships `ContextExpr`. The vocabulary is identical; only the evaluation strategy differs.
 
-`ag2.handoff` is added to the framework's stable event-type set in [envelope.md](envelope.md). Like `ag2.msg.text`, it's adapter-agnostic — any future adapter that wants tool-driven transitions reads it the same way.
+`EV_PACKET` is the durable record of each round and is documented in [envelope.md](envelope.md). The `Handoff` dataclass lives at `autogen.beta.network.handoff`.
 
 ## Persistence
 
@@ -318,7 +324,7 @@ Kept out of M4 to keep the core surface tight. The Protocol design accommodates 
 - `OnFailure` transitions — saga choreography composed from existing `Transition` vocabulary. Saga skeleton lives in `examples/saga.py`.
 
 ### Phase 3
-- `dispatch_audience` hook on `SessionAdapter` — per-recipient routing optimization that earns its keep when network round-trips are real.
+- `dispatch_audience` hook on `ChannelAdapter` — per-recipient routing optimization that earns its keep when network round-trips are real.
 
 ### Phase 4 (on-demand)
 - `RandomTarget` — random speaker pick.

@@ -62,7 +62,7 @@ class NetworkClient(Protocol):
         ttl: str | int | None = None,
         knobs: dict | None = None,
         labels: dict[str, str] | None = None,
-    ) -> Session:
+    ) -> Channel:
         """Open a session of `type` with `target`."""
 
     async def disconnect(self) -> None: ...
@@ -152,7 +152,7 @@ class AgentClient:
         labels: dict[str, str] | None = None,
         view_policy: ViewPolicy | None = None,
         intent: str | None = None,
-    ) -> Session: ...
+    ) -> Channel: ...
 
     # Handler registry — override the default per session type
     def on(self, session_type: str) -> Callable: ...
@@ -161,8 +161,8 @@ class AgentClient:
 
     # Building blocks for custom handlers (used by default handler too)
     async def read_wal_until(self, envelope: Envelope) -> list[Envelope]: ...
-    def resolve_view_policy(self, session: Session, envelope: Envelope) -> ViewPolicy: ...
-    def stamp_dependencies(self, session: Session, envelope: Envelope) -> dict: ...
+    def resolve_view_policy(self, session: Channel, envelope: Envelope) -> ViewPolicy: ...
+    def stamp_dependencies(self, session: Channel, envelope: Envelope) -> dict: ...
 
     # Discovery passthrough (used by `peers` tool)
     async def list_peers(self, **kwargs) -> list[Passport]: ...
@@ -204,7 +204,7 @@ Per session type, the framework ships a default handler. The handler is decompos
 # autogen/beta/network/client/handlers.py
 
 async def default_handler(envelope: Envelope, client: AgentClient) -> None:
-    session = await client._session(envelope.session_id)
+    session = await client._session(envelope.channel_id)
     view_policy = client.resolve_view_policy(session, envelope)
     wal = await client.read_wal_until(envelope)
     projection = await view_policy.project(
@@ -213,7 +213,7 @@ async def default_handler(envelope: Envelope, client: AgentClient) -> None:
 
     # Phase 2.0: dedup duplicate replies after redelivery.
     prior = client._hub.find_envelope_by_causation(
-        envelope.session_id,
+        envelope.channel_id,
         sender_id=client.agent_id,
         causation_id=envelope.envelope_id,
     )

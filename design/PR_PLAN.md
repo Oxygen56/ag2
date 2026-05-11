@@ -29,7 +29,7 @@ Source of truth for the design itself is [PLAN.md](PLAN.md). This file only cove
 |----|-------------|--------------|------------:|----------:|------:|
 | PR1 | Task primitive (framework-core) | `origin/main` | ~700 | ~320 | 22 |
 | PR2 | Network protocol + state + control plane | PR1 | ~7K | ~3.5K | 74 |
-| PR3 | Session participation tools + workflow | PR2 | ~1.1K | ~2.5K | 59 + 2 anthropic |
+| PR3 | Channel participation tools + workflow | PR2 | ~1.1K | ~2.5K | 59 + 2 anthropic |
 
 \* Approximate. PR2 ships the bulk of the source and adapter/expectation/observation tests. PR3 is mostly the LLM tool surface + tests that drive agents through tools.
 
@@ -57,7 +57,7 @@ Source of truth for the design itself is [PLAN.md](PLAN.md). This file only cove
 
 ## PR2 — Network protocol + state + control plane
 
-**Goal:** ship the entire network module **except** the LLM-facing tool surface. After this PR, agents can register through a hub, exchange envelopes inside protocol-defined sessions (consulting / conversation / discussion / workflow), participate in turn-taking via the default notify handler, and observe each other's tasks — all by writing tenant code that calls `Session.send()` and similar methods directly. The 6 LLM-facing tools (`say`, `delegate`, `peers`, `sessions`, `tasks`, `context`) and `NetworkPlugin` arrive in PR3.
+**Goal:** ship the entire network module **except** the LLM-facing tool surface. After this PR, agents can register through a hub, exchange envelopes inside protocol-defined sessions (consulting / conversation / discussion / workflow), participate in turn-taking via the default notify handler, and observe each other's tasks — all by writing tenant code that calls `Channel.send()` and similar methods directly. The 6 LLM-facing tools (`say`, `delegate`, `peers`, `sessions`, `tasks`, `context`) and `NetworkPlugin` arrive in PR3.
 
 **Branch:** `feat/network-pr2-protocol` off PR1.
 
@@ -157,7 +157,7 @@ PR3's branch then acquired the following on top of the realigned PR2 base before
 
 1. **`EV_HANDOFF` → `Handoff` typed return + `EV_PACKET`.** Tools that drive workflow next-speaker decisions used to post an `ag2.handoff` envelope; they now return a `Handoff(target=, reason=)` dataclass which the framework reads off the agent's local `ToolResultEvent` stream and folds into the round's `EV_PACKET`. Simpler tool authoring (no envelope semantics in user code), atomic round capture, clean place to attach context-variable mutations.
 
-2. **`session` → `channel`.** The whole "Session" vocabulary was renamed throughout the network module. The motivation (from review): "channel" is the standard distributed-systems term for a protocol-bound multi-party message stream; "session" conflated with the unrelated authentication-session concept and was confusing in the context of long-lived workflows.
+2. **`session` → `channel`.** The whole "Channel" vocabulary was renamed throughout the network module. The motivation (from review): "channel" is the standard distributed-systems term for a protocol-bound multi-party message stream; "channel" conflated with the unrelated authentication-session concept and was confusing in the context of long-lived workflows.
 
 **Rename inventory (every symbol, file, field):**
 
@@ -166,22 +166,22 @@ PR3's branch then acquired the following on top of the realigned PR2 base before
 | `network/session.py` | `network/channel.py` |
 | `network/client/session.py` | `network/client/channel.py` |
 | `network/client/tools/sessions.py` | `network/client/tools/channels.py` |
-| `Session` class | `Channel` |
-| `SessionAdapter` Protocol | `ChannelAdapter` |
-| `SessionInject` / `SessionStateInject` annotations | `ChannelInject` / `ChannelStateInject` |
-| `SessionManifest` / `SessionMetadata` / `SessionState` | `ChannelManifest` / `ChannelMetadata` / `ChannelState` |
-| `SessionTypeAccess` | `ChannelTypeAccess` |
-| `SESSION_DEP` / `SESSION_STATE_DEP` constants | `CHANNEL_DEP` / `CHANNEL_STATE_DEP` |
+| `Channel` class | `Channel` |
+| `ChannelAdapter` Protocol | `ChannelAdapter` |
+| `ChannelInject` / `ChannelStateInject` annotations | `ChannelInject` / `ChannelStateInject` |
+| `ChannelManifest` / `ChannelMetadata` / `ChannelState` | `ChannelManifest` / `ChannelMetadata` / `ChannelState` |
+| `ChannelTypeAccess` | `ChannelTypeAccess` |
+| `CHANNEL_DEP` / `CHANNEL_STATE_DEP` constants | `CHANNEL_DEP` / `CHANNEL_STATE_DEP` |
 | `EV_SESSION_*` event types | `EV_CHANNEL_*` (CLOSED / EXPIRED / INVITE / INVITE_ACK / INVITE_REJECT / OPENED) |
 | `AUDIT_KIND_SESSION_*` audit kinds | `AUDIT_KIND_CHANNEL_*` (CREATED / CLOSED / EXPIRED) |
-| `Envelope.session_id` field | `Envelope.channel_id` |
+| `Envelope.channel_id` field | `Envelope.channel_id` |
 | Event-type prefix `ag2.session.` | `ag2.channel.` |
 | `Hub.{get,close,list}_session(s)` | `{get,close,list}_channel(s)` |
-| `HubClient.adapter_for(session_id)` (added in `291c30c87d5`) | `adapter_for(channel_id)` |
-| `TaskMirror(session_id=)` | `TaskMirror(channel_id=)` |
+| `HubClient.adapter_for(channel_id)` (added in `291c30c87d5`) | `adapter_for(channel_id)` |
+| `TaskMirror(channel_id=)` | `TaskMirror(channel_id=)` |
 | `ViewPolicy.project(session=metadata)` | `ViewPolicy.project(channel=metadata)` |
-| `NotifySessionHandler` (in `hub/expectations.py`) | `NotifyChannelHandler` |
-| `make_sessions_tool` (PR3 grouped tool factory) | `make_channels_tool` |
+| `NotifyChannelHandler` (in `hub/expectations.py`) | `NotifyChannelHandler` |
+| `make_channels_tool` (PR3 grouped tool factory) | `make_channels_tool` |
 
 **Removed in PR3 review:**
 
@@ -236,24 +236,24 @@ Use a scripted sweep, then verify by re-running the suite. Order matters because
    - `git mv autogen/beta/network/client/tools/sessions.py autogen/beta/network/client/tools/channels.py`
    - Rename matching test files (e.g. `test_session_smoke.py` stays for the historical-test-name convention used in merged main — check before renaming).
 2. Symbol pass — apply in this order so partial matches don't collide:
-   - `SESSION_STATE_DEP` → `CHANNEL_STATE_DEP` (most specific first)
-   - `SESSION_DEP` → `CHANNEL_DEP`
-   - `EV_SESSION_INVITE_ACK` → `EV_CHANNEL_INVITE_ACK`, then `EV_SESSION_INVITE_REJECT`, then `EV_SESSION_INVITE`, then the rest of `EV_SESSION_*`
-   - `AUDIT_KIND_SESSION_CREATED` / `_CLOSED` / `_EXPIRED` → `AUDIT_KIND_CHANNEL_*`
-   - `SessionTypeAccess` → `ChannelTypeAccess`, `SessionStateInject` → `ChannelStateInject`, `SessionInject` → `ChannelInject`
-   - `SessionAdapter` → `ChannelAdapter`, `SessionManifest` → `ChannelManifest`, `SessionMetadata` → `ChannelMetadata`, `SessionState` → `ChannelState`
-   - `Session` (the client class) → `Channel`. Be careful: many docstrings say "session" the *concept* — use word-boundary regex and review each hit.
-   - `NotifySessionHandler` → `NotifyChannelHandler`
-   - `make_sessions_tool` → `make_channels_tool`
+   - `CHANNEL_STATE_DEP` → `CHANNEL_STATE_DEP` (most specific first)
+   - `CHANNEL_DEP` → `CHANNEL_DEP`
+   - `EV_CHANNEL_INVITE_ACK` → `EV_CHANNEL_INVITE_ACK`, then `EV_CHANNEL_INVITE_REJECT`, then `EV_CHANNEL_INVITE`, then the rest of `EV_SESSION_*`
+   - `AUDIT_KIND_CHANNEL_CREATED` / `_CLOSED` / `_EXPIRED` → `AUDIT_KIND_CHANNEL_*`
+   - `ChannelTypeAccess` → `ChannelTypeAccess`, `ChannelStateInject` → `ChannelStateInject`, `ChannelInject` → `ChannelInject`
+   - `ChannelAdapter` → `ChannelAdapter`, `ChannelManifest` → `ChannelManifest`, `ChannelMetadata` → `ChannelMetadata`, `ChannelState` → `ChannelState`
+   - `Channel` (the client class) → `Channel`. Be careful: many docstrings say "channel" the *concept* — use word-boundary regex and review each hit.
+   - `NotifyChannelHandler` → `NotifyChannelHandler`
+   - `make_channels_tool` → `make_channels_tool`
 3. Field/parameter pass:
-   - `session_id=` → `channel_id=` (keyword args), `session_id:` → `channel_id:` (annotations), `.session_id` → `.channel_id` (attribute reads), `["session_id"]` → `["channel_id"]` (dict keys), `'session_id'` → `'channel_id'`
+   - `channel_id=` → `channel_id=` (keyword args), `channel_id:` → `channel_id:` (annotations), `.channel_id` → `.channel_id` (attribute reads), `["channel_id"]` → `["channel_id"]` (dict keys), `'channel_id'` → `'channel_id'`
    - `session=metadata` → `channel=metadata` in `ViewPolicy.project` callers
-   - `TaskMirror(session_id=` → `TaskMirror(channel_id=`
+   - `TaskMirror(channel_id=` → `TaskMirror(channel_id=`
 4. Event-type string pass:
-   - `"ag2.session.` → `"ag2.channel.` (and the single-quote variants)
+   - `"ag2.channel.` → `"ag2.channel.` (and the single-quote variants)
 5. Method-name pass on Hub / HubClient call sites:
-   - `get_session(` → `get_channel(`, `close_session(` → `close_channel(`, `list_sessions(` → `list_channels(`
-6. Documentation pass on prose in docstrings — leave the word "session" where the surrounding sentence is talking about an authentication session, an HTTP session, or the concept abstractly; rename only where the code-level type is meant.
+   - `get_channel(` → `get_channel(`, `close_channel(` → `close_channel(`, `list_channels(` → `list_channels(`
+6. Documentation pass on prose in docstrings — leave the word "channel" where the surrounding sentence is talking about an authentication session, an HTTP session, or the concept abstractly; rename only where the code-level type is meant.
 7. Run `pytest test/beta/network/` and `ruff check autogen/beta/network/` to catch missed renames; expect a long iteration loop the first time.
 
 Goal: zero behavioural change in this commit. Diff should be all renames; new logic stays out.
@@ -291,15 +291,15 @@ The `Handoff`/`EV_PACKET` model + new `ChannelAdapter` Protocol methods need rea
 
 **Phase E — design doc sync.**
 
-   - `design/envelope.md` — replace the `EV_HANDOFF` row with `EV_PACKET` + `EV_CONTEXT_SET`; rename `session_id` references to `channel_id`.
-   - `design/sessions.md` → rename file to `design/channels.md`; rewrite "Session"-named symbols throughout. Document the new `ChannelAdapter` Protocol surface (`extract_turn_input` / `build_round_envelope` / `render_envelope`) + `CHANNEL_STATE_DEP` / `ChannelStateInject`.
+   - `design/envelope.md` — replace the `EV_HANDOFF` row with `EV_PACKET` + `EV_CONTEXT_SET`; rename `channel_id` references to `channel_id`.
+   - `design/sessions.md` → rename file to `design/channels.md`; rewrite "Channel"-named symbols throughout. Document the new `ChannelAdapter` Protocol surface (`extract_turn_input` / `build_round_envelope` / `render_envelope`) + `CHANNEL_STATE_DEP` / `ChannelStateInject`.
    - `design/workflow.md` — describe the `Handoff`-typed-return model + `EV_PACKET` round capture; remove the `event_type=="ag2.handoff"` references and the `NetworkPlugin.register_workflow` references; document that handoff tools are now user-authored.
    - `design/network_plugin.md` — drop the `register_workflow(graph)` documentation; replace with "write your own `@tool` returning `Handoff`" guidance.
    - `design/PLAN.md` M4 section — add a deviation note that PR2/PR3 review rewrote handoff semantics; the M4 section's `EV_HANDOFF` references are historical.
    - `design/PLAN.md` Phase 3 Cut 3.3 — `dispatch_audience` for `EV_TEXT / EV_PACKET` (not `EV_HANDOFF`).
-   - `design/clients.md` — `Session` → `Channel`; `client/session.py` → `client/channel.py`.
-   - `design/hub.md` — `get_session` → `get_channel` etc.
-   - Any other doc that mentions "session" the type rather than "session" the concept — search and fix.
+   - `design/clients.md` — `Channel` → `Channel`; `client/session.py` → `client/channel.py`.
+   - `design/hub.md` — `get_channel` → `get_channel` etc.
+   - Any other doc that mentions "channel" the type rather than "channel" the concept — search and fix.
 
 ### Suggested PR split
 
@@ -456,7 +456,7 @@ PR2 ships this file with the re-export block restricted to the symbols defined i
 
 ### `autogen/beta/network/client/__init__.py`
 
-PR2 ships this file with re-exports for `AgentClient`, `HubClient`, `NetworkClient`, `Session`, `ClientTask`, `default_handler`, dependency-injection annotations, and skill-render helpers. PR3 adds `NetworkPlugin`, `NetworkContextPolicy`, and the tool factories (`make_say_tool` / `make_delegate_tool` / `make_peers_tool` / `make_sessions_tool` / `make_tasks_tool` / `make_context_tool` / `make_handoff_tool` / `make_handoff_tools_for_graph`).
+PR2 ships this file with re-exports for `AgentClient`, `HubClient`, `NetworkClient`, `Channel`, `ClientTask`, `default_handler`, dependency-injection annotations, and skill-render helpers. PR3 adds `NetworkPlugin`, `NetworkContextPolicy`, and the tool factories (`make_say_tool` / `make_delegate_tool` / `make_peers_tool` / `make_channels_tool` / `make_tasks_tool` / `make_context_tool` / `make_handoff_tool` / `make_handoff_tools_for_graph`).
 
 ### `autogen/beta/network/client/hub_client.py`
 

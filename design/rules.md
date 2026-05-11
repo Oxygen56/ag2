@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
-class SessionTypeAccess:
+class ChannelTypeAccess:
     initiate: list[str] = field(default_factory=lambda: ["*"])
     accept: list[str] = field(default_factory=lambda: ["*"])
 
@@ -20,7 +20,7 @@ class SessionTypeAccess:
 class AccessBlock:
     inbound_from: list[str] = field(default_factory=lambda: ["*"])    # globs over `name`
     outbound_to: list[str] = field(default_factory=lambda: ["*"])
-    session_types: SessionTypeAccess = field(default_factory=SessionTypeAccess)
+    session_types: ChannelTypeAccess = field(default_factory=ChannelTypeAccess)
 
 
 @dataclass(slots=True)
