@@ -11,8 +11,8 @@ Source of truth for the design itself is [PLAN.md](PLAN.md). This file only cove
 | PR1 | [#2774](https://github.com/ag2ai/ag2/pull/2774) | `feat/network-pr1-task` | `feat(beta): add Task lifecycle primitive` | ✅ merged |
 | PR2 | [#2775](https://github.com/ag2ai/ag2/pull/2775) | `feat/network-pr2-protocol` | `feat(beta/network): protocol, state, and control plane` | ✅ merged |
 | PR3 | [#2776](https://github.com/ag2ai/ag2/pull/2776) | `feat/network-pr3-tools` | `feat(beta/network): LLM tool surface and workflow` | ✅ merged (`5c2247ebb77`) |
-| PR4 | _tbd_ | `feat/network-pr4-foundation` | `feat(beta/network): HumanClient + observability foundation` | 🟡 in progress |
-| PR5 | _tbd_ | `feat/network-pr5-adapter-tools-and-subclass` | `feat(beta/network): adapter-owned tools + subclass surface` | 📋 planned |
+| PR4 | _tbd_ | `feat/network-pr4-foundation` | `feat(beta/network): HumanClient + observability foundation` | 🟢 ready to push (2 commits, 281 unit + 17 anthropic smokes passing) |
+| PR5 | _tbd_ | `feat/network-pr5-adapter-tools-and-subclass` | `feat(beta/network): adapter-owned tools + subclass surface` | 🟢 ready to push (1 commit, 298 unit + 17 anthropic smokes passing) |
 
 ## Strategy
 
@@ -361,3 +361,14 @@ These re-enter planning after stabilization merges. The architectural seams adde
 - `design/` stays out of every PR (same rule as PR1–PR3).
 - Public code never references milestone/phase/PR numbers or design docs (CLAUDE.md rule). Module docstrings describe what the code does, not when it shipped.
 - PR bodies follow the existing skeleton (`## Why are these changes needed?` / `## What ships` / `## Test plan` / `## Related issue` / `## Checks` / `## AI assistance`).
+
+### What landed (commits ready to push)
+
+PR4 — `feat/network-pr4-foundation` off `main`:
+- `5ed37b1080c` — `feat(beta/network): add HumanClient + Passport.kind for native HITL`
+- `e78c23d8640` — `feat(beta/network): HubListener + HubArbiter observability layer`
+
+PR5 — `feat/network-pr5-adapter-tools-and-subclass` off PR4:
+- `97fd8bbef90` — `feat(beta/network): adapter-owned tools + subclass surface + latent fixes`
+
+Validation snapshot when PR5 closed: 298 in-tree network tests + 17 anthropic smokes (`test_workflow_smoke`, `test_network_smoke`, `test_session_smoke`, `test_network_coverage_smoke`, `test_anthropic_integration`) all passing.
