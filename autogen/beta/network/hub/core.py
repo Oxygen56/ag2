@@ -30,6 +30,7 @@ import asyncio
 import contextlib
 import fnmatch
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -67,6 +68,7 @@ from ..errors import (
     NetworkError,
     NotFoundError,
     ProtocolError,
+    RateLimited,
 )
 from ..identity import ObservedStat, Passport, Resume
 from ..ids import make_id
@@ -120,6 +122,7 @@ from .layout import (
     tasks_root,
     wal_path,
 )
+from .rate_limiter import TokenBucket, make_bucket
 from .sweepers import _IntervalSweeper
 
 __all__ = ("Hub", "PendingTurn")
@@ -198,6 +201,7 @@ class Hub:
         *,
         auth: AuthRegistry | None = None,
         clock: Callable[[], str] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
         ttl_sweep_interval: float = 30.0,
         expectation_sweep_interval: float = 10.0,
         invite_ack_timeout: float = 30.0,
@@ -206,6 +210,10 @@ class Hub:
         self._store = store
         self._auth = auth if auth is not None else AuthRegistry.default()
         self._clock = clock if clock is not None else _utc_now_iso
+        # Separate monotonic clock for the rate limiter so tests can
+        # advance time without distorting ISO-stamped audit records.
+        # Defaults to ``time.monotonic``.
+        self._monotonic = monotonic_clock if monotonic_clock is not None else time.monotonic
         self._ttl_sweep_interval = ttl_sweep_interval
         self._expectation_sweep_interval = expectation_sweep_interval
         self._invite_ack_timeout = invite_ack_timeout
@@ -274,6 +282,14 @@ class Hub:
         # a transport with ack frames.
         self._inbox_pending: dict[str, int] = {}
 
+        # Per-sender token-bucket cache. Key absent = first post, key
+        # present with ``None`` = limiter disabled (``per_minute <= 0``);
+        # key present with a ``TokenBucket`` = active limiter.
+        # ``set_rule`` / ``unregister`` invalidate the entry so the next
+        # post rebuilds from the new rule. Substantive events only —
+        # protocol envelopes bypass.
+        self._rate_buckets: dict[str, TokenBucket | None] = {}
+
         # Transport-side state.
         self._endpoints_by_id: dict[str, LinkEndpoint] = {}
         self._agent_to_endpoint: dict[str, str] = {}
@@ -297,6 +313,7 @@ class Hub:
         *,
         auth: AuthRegistry | None = None,
         clock: Callable[[], str] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
         ttl_sweep_interval: float = 30.0,
         expectation_sweep_interval: float = 10.0,
         invite_ack_timeout: float = 30.0,
@@ -320,6 +337,7 @@ class Hub:
             store,
             auth=auth,
             clock=clock,
+            monotonic_clock=monotonic_clock,
             ttl_sweep_interval=ttl_sweep_interval,
             expectation_sweep_interval=expectation_sweep_interval,
             invite_ack_timeout=invite_ack_timeout,
@@ -593,6 +611,7 @@ class Hub:
             self._resumes.pop(agent_id, None)
             self._rules.pop(agent_id, None)
             self._skills.pop(agent_id, None)
+            self._rate_buckets.pop(agent_id, None)
             if passport is not None and self._name_to_id.get(passport.name) == agent_id:
                 self._name_to_id.pop(passport.name, None)
 
@@ -758,6 +777,9 @@ class Hub:
         rule.version = (self._rules[agent_id].version + 1) if agent_id in self._rules else rule.version
         await self._persist_rule(agent_id, rule)
         self._rules[agent_id] = rule
+        # Drop the cached bucket so the next post rebuilds from the
+        # new ``LimitsBlock.rate``.
+        self._rate_buckets.pop(agent_id, None)
         await self._audit_log.append({
             "at": self._clock(),
             "kind": AUDIT_KIND_RULE_SET,
@@ -1447,6 +1469,23 @@ class Hub:
             if removed is not None and envelope.sender_id in removed:
                 raise ProtocolError(
                     f"sender {envelope.sender_id!r} removed from channel {envelope.channel_id!r}"
+                )
+
+        # Per-sender rate limit. Protocol envelopes (acks, opens,
+        # expectation violations) bypass so the channel state machine
+        # can advance even under throttle. Substantive events only.
+        if not _is_protocol_event(envelope.event_type):
+            if envelope.sender_id in self._rate_buckets:
+                bucket = self._rate_buckets[envelope.sender_id]
+            else:
+                rate = sender_rule.limits.rate
+                bucket = make_bucket(rate.per_minute, rate.burst, self._monotonic())
+                self._rate_buckets[envelope.sender_id] = bucket
+            if bucket is not None and not bucket.consume(self._monotonic()):
+                rate = sender_rule.limits.rate
+                raise RateLimited(
+                    f"sender {sender.name!r} rate limited "
+                    f"(per_minute={rate.per_minute}, burst={rate.burst or rate.per_minute})"
                 )
 
         # Outbound access check. Self-routing is always allowed —

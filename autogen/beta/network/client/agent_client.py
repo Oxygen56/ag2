@@ -51,6 +51,13 @@ __all__ = ("AgentClient",)
 EnvelopeHandler = Callable[[Envelope], Awaitable[None]]
 EnvelopePredicate = Callable[[Envelope], bool]
 
+# Tenant-side per-envelope transform hooks. A hook receives the
+# in-flight envelope and returns either a modified envelope (often the
+# same instance) to continue dispatch, or ``None`` to drop. Hooks run
+# in registration order; the first ``None`` short-circuits the chain.
+EnvelopeSendHook = Callable[[Envelope], Awaitable["Envelope | None"]]
+EnvelopeReceiveHook = Callable[[Envelope], Awaitable["Envelope | None"]]
+
 
 class AgentClient:
     """Tenant-side handle for one ``(Agent, identity, hub)`` registration."""
@@ -99,6 +106,12 @@ class AgentClient:
         # Populated by ``iter_chunks`` callers; cleared on terminal chunk.
         self._chunk_subscriptions: dict[tuple[str, str], ChunkSubscription] = {}
 
+        # Tenant-side per-envelope hook chains. Run in registration
+        # order on send (outbound) and receive (inbound). A hook
+        # returning ``None`` drops the envelope.
+        self._send_hooks: list[EnvelopeSendHook] = []
+        self._receive_hooks: list[EnvelopeReceiveHook] = []
+
     # ── Properties ───────────────────────────────────────────────────────────
 
     @property
@@ -140,7 +153,18 @@ class AgentClient:
     # ── NetworkClient impl ───────────────────────────────────────────────────
 
     async def receive(self, envelope: Envelope) -> None:
-        """Hub delivery → fan out to inbox + (suppressible) handler."""
+        """Hub delivery → fan out to inbox + (suppressible) handler.
+
+        Receive hooks run before fan-out. A hook returning ``None``
+        drops the envelope entirely (no inbox put, no handler
+        invocation); the WAL still has the original because hooks run
+        client-side after hub-side persistence.
+        """
+        for hook in self._receive_hooks:
+            result = await hook(envelope)
+            if result is None:
+                return
+            envelope = result
         inbox = self.ensure_channel_inbox(envelope.channel_id)
         await inbox.put(envelope)
         if envelope.channel_id in self._handler_suppressed_channels:
@@ -297,12 +321,44 @@ class AgentClient:
     # ── Envelope send ────────────────────────────────────────────────────────
 
     async def send_envelope(self, envelope: Envelope) -> str:
-        """Post an envelope through the hub. Returns the stamped envelope_id."""
+        """Post an envelope through the hub. Returns the stamped envelope_id.
+
+        Send hooks run before posting. A hook returning ``None`` drops
+        the send and returns an empty envelope_id — callers that care
+        about delivery must check the return value.
+        """
         if self._disconnected:
             raise RuntimeError("AgentClient is disconnected")
         if envelope.sender_id == "":
             envelope.sender_id = self.agent_id
+        for hook in self._send_hooks:
+            result = await hook(envelope)
+            if result is None:
+                return ""
+            envelope = result
         return await self._hub_client.post_envelope(envelope)
+
+    # ── Tenant-side per-envelope hooks ──────────────────────────────────────
+
+    def add_send_hook(self, hook: EnvelopeSendHook) -> None:
+        """Register a per-envelope outbound transform.
+
+        Hooks run in registration order on every ``send_envelope`` call,
+        before the envelope reaches the hub. Each hook returns the
+        (possibly-modified) envelope to continue, or ``None`` to drop.
+        The first ``None`` short-circuits the chain.
+        """
+        self._send_hooks.append(hook)
+
+    def add_receive_hook(self, hook: EnvelopeReceiveHook) -> None:
+        """Register a per-envelope inbound transform.
+
+        Hooks run in registration order on every ``receive`` call,
+        before the inbox put and notify handler. Each hook returns
+        the (possibly-modified) envelope to continue, or ``None`` to
+        drop. Hub-side WAL is unaffected — hooks are client-local.
+        """
+        self._receive_hooks.append(hook)
 
     # ── Streaming chunks ─────────────────────────────────────────────────────
 
