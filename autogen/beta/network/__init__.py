@@ -70,8 +70,8 @@ from .envelope import (
     EV_EXPECTATION_VIOLATED,
     EV_PACKET,
     EV_QUORUM_CHANGED,
-    EV_TASK_CANCEL_REQUEST,
     EV_TASK_CANCELLED,
+    EV_TASK_CANCEL_REQUEST,
     EV_TEXT,
     Envelope,
     Priority,
@@ -131,6 +131,7 @@ from .identity import (
     ResumeExample,
 )
 from .ids import make_id
+from .migration import UnsupportedPatternError, from_classic_pattern
 from .policies import AGENT_CLIENT_DEP, CHANNEL_DEP, CHANNEL_STATE_DEP, HUB_DEP, TASK_DEP
 from .rule import (
     AccessBlock,
@@ -147,6 +148,7 @@ from .transitions import (
     Always,
     ContextEquals,
     FromSpeaker,
+    LLMSelectorTarget,
     RevertToInitiatorTarget,
     RoundRobinTarget,
     StayTarget,
@@ -213,8 +215,8 @@ __all__ = (
     "EV_EXPECTATION_VIOLATED",
     "EV_PACKET",
     "EV_QUORUM_CHANGED",
-    "EV_TASK_CANCEL_REQUEST",
     "EV_TASK_CANCELLED",
+    "EV_TASK_CANCEL_REQUEST",
     "EV_TEXT",
     "HUB_DEP",
     "ORDERING_ROUND_ROBIN",
@@ -275,6 +277,7 @@ __all__ = (
     "HubInject",
     "InboxBlock",
     "InboxFull",
+    "LLMSelectorTarget",
     "LimitsBlock",
     "LinkClient",
     "LinkEndpoint",
@@ -327,6 +330,7 @@ __all__ = (
     "TransitionTarget",
     "TurnWithinEvaluator",
     "UnsubscribeFrame",
+    "UnsupportedPatternError",
     "ViewPolicy",
     "Violation",
     "ViolationHandler",
@@ -341,6 +345,7 @@ __all__ = (
     "default_handler",
     "default_handlers",
     "encode_frame",
+    "from_classic_pattern",
     "make_id",
     "parse_duration",
     "parse_skill_frontmatter",

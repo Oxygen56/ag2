@@ -33,8 +33,11 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
+from autogen.beta.tools import tool as _tool_decorator
+
 from .envelope import EV_PACKET, Envelope
 from .errors import NetworkError
+from .handoff import Handoff
 
 if TYPE_CHECKING:
     from .adapters.workflow import WorkflowState
@@ -44,6 +47,7 @@ __all__ = (
     "Always",
     "ContextEquals",
     "FromSpeaker",
+    "LLMSelectorTarget",
     "RevertToInitiatorTarget",
     "RoundRobinTarget",
     "StayTarget",
@@ -178,6 +182,36 @@ class TerminateTarget:
         return TransitionDecision(next_speaker=None, close_reason=self.reason)
 
 
+@dataclass(slots=True)
+class LLMSelectorTarget:
+    """Route the next turn to an LLM-driven selector.
+
+    AG2-classic ``AutoPattern`` equivalent. Resolves to ``selector_id``
+    so that agent's notify handler engages its LLM; candidate selection
+    happens via the selector calling a handoff tool that returns a
+    :class:`autogen.beta.network.handoff.Handoff`. The workflow adapter
+    reads the ``Handoff`` from the selector's ``ToolResultEvent`` stream
+    and routes to the chosen candidate.
+
+    ``candidates`` is informational — the framework doesn't enforce
+    that the selector picks from this list. It exists so a graph
+    serialised across processes can be inspected (``graph.dumps()``)
+    and so :meth:`TransitionGraph.auto_pattern` can wire the matching
+    handoff transitions automatically.
+
+    Pure resolver — no async resolution, no I/O. The selector's
+    deliberation happens during their normal LLM turn; the framework
+    only picks where to *route*, not what to *think*.
+    """
+
+    selector_id: str
+    candidates: list[str] = field(default_factory=list)
+    name: ClassVar[str] = "llm_selector"
+
+    def resolve(self, state: "WorkflowState", envelope: Envelope) -> TransitionDecision:
+        return TransitionDecision(next_speaker=self.selector_id)
+
+
 # ── Built-in TransitionConditions ───────────────────────────────────────────
 
 
@@ -249,6 +283,7 @@ _BUILTIN_TARGETS: tuple[type[TransitionTarget], ...] = (
     StayTarget,
     RevertToInitiatorTarget,
     TerminateTarget,
+    LLMSelectorTarget,
 )
 
 _BUILTIN_CONDITIONS: tuple[type[TransitionCondition], ...] = (
@@ -422,8 +457,106 @@ class TransitionGraph:
             max_turns=len(steps),
         )
 
+    @classmethod
+    def auto_pattern(
+        cls,
+        selector_id: str,
+        candidates: list[str],
+        *,
+        handoff_tools: dict[str, str] | None = None,
+        max_turns: int | None = None,
+    ) -> tuple["TransitionGraph", list[object]]:
+        """AG2-classic ``AutoPattern`` equivalent.
+
+        Wires a selector + candidates into a graph that:
+
+        * Starts with the selector (``initial_speaker=selector_id``).
+        * Routes back to the selector after every candidate's turn
+          (so the selector can pick again).
+        * Materialises one ``Handoff``-returning tool per candidate so
+          the selector's LLM has a button per route. The tools are
+          returned alongside the graph — drop them into
+          ``selector_agent.tools`` to make them callable.
+
+        ``handoff_tools`` defaults to ``{candidate: f"transfer_to_{candidate}"}``
+        for every candidate. Override the mapping when the selector's
+        existing tool surface uses different names.
+
+        Returns ``(graph, tools)`` so the caller can wire both ends in
+        one shot:
+
+        .. code-block:: python
+
+            graph, tools = TransitionGraph.auto_pattern(
+                selector_id="manager",
+                candidates=["eng", "sales"],
+            )
+            manager_agent.tools.extend(tools)
+            await client.open(type="workflow", knobs={"graph": graph.dumps()})
+        """
+        if not candidates:
+            raise WorkflowGraphError("auto_pattern requires at least 1 candidate")
+        tools_map = (
+            handoff_tools
+            if handoff_tools is not None
+            else {agent_id: f"transfer_to_{agent_id}" for agent_id in candidates}
+        )
+        transitions: list[Transition] = []
+        # Selector → candidate routes via tool calls — kept as a graph
+        # rule so a non-Handoff-aware adapter would still route
+        # correctly, and so the graph remains inspectable after
+        # serialisation.
+        for candidate, tool_name in tools_map.items():
+            transitions.append(
+                Transition(when=ToolCalled(tool_name), then=AgentTarget(candidate))
+            )
+        # Candidate replies route back to the selector for the next pick.
+        for candidate in candidates:
+            transitions.append(
+                Transition(when=FromSpeaker(candidate), then=AgentTarget(selector_id))
+            )
+        graph = cls(
+            initial_speaker=selector_id,
+            transitions=transitions,
+            default_target=TerminateTarget(reason="selector_terminated"),
+            max_turns=max_turns,
+        )
+        tools = _build_handoff_tools(tools_map)
+        return graph, tools
+
 
 # ── Serialization helpers (module-level — no nested fns in hot path) ────────
+
+
+def _build_handoff_tools(handoffs: dict[str, str]) -> list[object]:
+    """Materialise one ``Handoff``-returning tool per ``(target, tool_name)``.
+
+    Input ``handoffs`` maps each candidate's id (key) to the tool name
+    the selector calls to route to that candidate (value). Used by
+    :meth:`TransitionGraph.auto_pattern` to give the selector's LLM
+    one button per candidate. Tools are scoped per-agent (appended
+    to ``agent.tools``); the workflow adapter reads the returned
+    ``Handoff`` from the agent's local ``ToolResultEvent`` stream and
+    routes the next speaker to ``target``.
+    """
+    tools: list[object] = []
+    for target_name, tool_name in handoffs.items():
+        tools.append(_make_handoff_tool(tool_name, target_name))
+    return tools
+
+
+def _make_handoff_tool(tool_name: str, target_name: str) -> object:
+    """Build one ``@tool``-decorated coroutine returning ``Handoff``.
+
+    Defined at module scope so the ``target_name`` is bound through the
+    function argument rather than a loop-late closure.
+    """
+
+    @_tool_decorator(name=tool_name, description=f"Hand off to {target_name}.")
+    async def _handoff(reason: str = "") -> Handoff:
+        return Handoff(target=target_name, reason=reason)
+
+    return _handoff
 
 
 def _target_to_dict(target: TransitionTarget) -> dict[str, Any]:
