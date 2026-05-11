@@ -66,6 +66,7 @@ def _invite_only_handler(client):
     ``AgentClient.receive`` ack path because the handler returns
     cleanly on every invocation.
     """
+
     async def handler(envelope: Envelope) -> None:
         if envelope.event_type != EV_CHANNEL_INVITE:
             return
@@ -290,10 +291,9 @@ async def test_hello_replay_redelivers_unacked_envelopes() -> None:
                     async for frame in bob_ws2.frames():
                         if isinstance(frame, WelcomeFrame):
                             saw_welcome = True
-                        elif isinstance(frame, NotifyFrame):
-                            if frame.envelope.event_type == EV_TEXT:
-                                replayed.append(frame)
-                                break
+                        elif isinstance(frame, NotifyFrame) and frame.envelope.event_type == EV_TEXT:
+                            replayed.append(frame)
+                            break
             except asyncio.TimeoutError:
                 pass
 

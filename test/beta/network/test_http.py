@@ -22,22 +22,22 @@ Covers:
 import httpx
 import pytest
 
+from autogen.beta import Agent
 from autogen.beta.knowledge import MemoryKnowledgeStore
 from autogen.beta.network import (
     ApiKeyAuth,
     AuthBlock,
     AuthRegistry,
+    ChannelState,
     Hub,
     HubClient,
     LocalLink,
     NoAuth,
     Passport,
     Resume,
-    ChannelState,
     make_http_app,
 )
 from autogen.beta.testing import TestConfig
-from autogen.beta import Agent
 
 
 def _agent(name: str) -> Agent:

@@ -33,8 +33,6 @@ from autogen.beta.network import (
     EV_TEXT,
     Envelope,
     Hub,
-    HubClient,
-    LocalLink,
     Passport,
     Resume,
 )
@@ -43,17 +41,17 @@ from autogen.beta.network.adapters.workflow import (
     WorkflowAdapter,
     WorkflowState,
 )
-from autogen.beta.network.envelope import EV_PACKET, EV_CHANNEL_OPENED
 from autogen.beta.network.channel import (
-    Participant,
-    ParticipantRole,
     ChannelManifest,
     ChannelMetadata,
     ChannelState,
+    Participant,
+    ParticipantRole,
 )
+from autogen.beta.network.envelope import EV_CHANNEL_OPENED, EV_PACKET
 from autogen.beta.network.transitions import (
-    Always,
     AgentTarget,
+    Always,
     RoundRobinTarget,
     Transition,
     TransitionGraph,
@@ -61,10 +59,7 @@ from autogen.beta.network.transitions import (
 
 
 def _participants(*names: str) -> list[Participant]:
-    return [
-        Participant(agent_id=name, role=ParticipantRole.PARTICIPANT, order=i)
-        for i, name in enumerate(names)
-    ]
+    return [Participant(agent_id=name, role=ParticipantRole.PARTICIPANT, order=i) for i, name in enumerate(names)]
 
 
 def _metadata(graph: TransitionGraph, participants: list[Participant]) -> ChannelMetadata:

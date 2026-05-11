@@ -23,6 +23,7 @@ from autogen.beta import Agent
 from autogen.beta.knowledge import MemoryKnowledgeStore
 from autogen.beta.network import (
     EV_TEXT,
+    ChannelState,
     Envelope,
     Hub,
     HubClient,
@@ -33,7 +34,6 @@ from autogen.beta.network import (
     RateLimited,
     Resume,
     Rule,
-    ChannelState,
 )
 from autogen.beta.testing import TestConfig
 
@@ -136,9 +136,7 @@ async def test_buckets_are_per_sender() -> None:
     bob_hc = HubClient(link, hub=hub)
 
     tight = Rule(limits=LimitsBlock(rate=RateBlock(per_minute=60, burst=1)))
-    alice = await alice_hc.register(
-        _agent("alice"), Passport(name="alice"), Resume(), rule=tight
-    )
+    alice = await alice_hc.register(_agent("alice"), Passport(name="alice"), Resume(), rule=tight)
     bob = await bob_hc.register(_agent("bob"), Passport(name="bob"), Resume())
 
     session = await alice.open(type="conversation", target="bob")

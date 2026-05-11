@@ -21,9 +21,9 @@ import pytest
 from autogen.beta import Agent
 from autogen.beta.knowledge import MemoryKnowledgeStore
 from autogen.beta.network import (
-    EV_QUORUM_CHANGED,
     EV_CHANNEL_INVITE,
     EV_CHANNEL_INVITE_REJECT,
+    EV_QUORUM_CHANGED,
     Envelope,
     Hub,
     HubClient,
@@ -31,8 +31,8 @@ from autogen.beta.network import (
     Passport,
     Resume,
 )
-from autogen.beta.network.errors import ProtocolError
 from autogen.beta.network.channel import ChannelState
+from autogen.beta.network.errors import ProtocolError
 from autogen.beta.testing import TestConfig
 
 

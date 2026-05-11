@@ -149,13 +149,11 @@ class _AuthMiddleware:
 
 async def _send_json(send: Send, status: int, body: dict[str, Any]) -> None:
     payload = json.dumps(body).encode("utf-8")
-    await send(
-        {
-            "type": "http.response.start",
-            "status": status,
-            "headers": [(b"content-type", b"application/json")],
-        }
-    )
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [(b"content-type", b"application/json")],
+    })
     await send({"type": "http.response.body", "body": payload})
 
 
@@ -195,9 +193,7 @@ def make_http_app(hub: "Hub") -> Starlette:
         sort_by = params.get("sort_by")
         limit = int(params.get("limit", 50))
         try:
-            passports = await hub.list_agents(
-                capability=capability, query=query, sort_by=sort_by, limit=limit
-            )
+            passports = await hub.list_agents(capability=capability, query=query, sort_by=sort_by, limit=limit)
         except NetworkError as exc:
             return _error_response(exc)
         return JSONResponse({"agents": [p.to_dict() for p in passports]})
@@ -237,10 +233,7 @@ def make_http_app(hub: "Hub") -> Starlette:
         except NetworkError as exc:
             return _error_response(exc)
         if not include_terminal:
-            channels = [
-                m for m in channels
-                if m.state not in (ChannelState.CLOSED, ChannelState.EXPIRED)
-            ]
+            channels = [m for m in channels if m.state not in (ChannelState.CLOSED, ChannelState.EXPIRED)]
         return JSONResponse({"channels": [m.to_dict() for m in channels[:limit]]})
 
     async def get_channel(request: Request) -> Response:
@@ -279,9 +272,7 @@ def make_http_app(hub: "Hub") -> Starlette:
         until_param = params.get("until")
         until = int(until_param) if until_param is not None else None
         try:
-            envelopes = await hub.read_wal(
-                request.path_params["channel_id"], since=since, until=until
-            )
+            envelopes = await hub.read_wal(request.path_params["channel_id"], since=since, until=until)
         except NetworkError as exc:
             return _error_response(exc)
         return JSONResponse({"envelopes": [e.to_dict() for e in envelopes]})

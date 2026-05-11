@@ -21,6 +21,7 @@ Covers:
 """
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -28,12 +29,12 @@ from autogen.beta import Agent
 from autogen.beta.knowledge import MemoryKnowledgeStore
 from autogen.beta.network import (
     EV_TEXT,
+    Channel,
     Hub,
     HubClient,
     LocalLink,
     Passport,
     Resume,
-    Channel,
 )
 from autogen.beta.testing import TestConfig
 
@@ -153,10 +154,8 @@ async def test_audience_scoping_skips_excluded_recipient() -> None:
     await asyncio.wait_for(bob_task, timeout=2.0)
     # Carol's iterator never receives a final chunk; close it ourselves.
     carol_task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await carol_task
-    except asyncio.CancelledError:
-        pass
 
     assert bob_received == ["private"]
     assert carol_received == []

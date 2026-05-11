@@ -20,16 +20,15 @@ from autogen.beta.network import (
     from_classic_pattern,
 )
 from autogen.beta.network.adapters.workflow import WorkflowState
+from autogen.beta.network.envelope import EV_PACKET, Envelope
 from autogen.beta.network.transitions import (
     AgentTarget,
     LLMSelectorTarget,
-    TerminateTarget,
     ToolCalled,
     Transition,
     TransitionGraph,
     TransitionRegistry,
 )
-from autogen.beta.network.envelope import EV_PACKET, Envelope
 
 
 def _state(**kwargs) -> WorkflowState:
@@ -100,12 +99,8 @@ def test_auto_pattern_factory_wires_selector_and_handoffs() -> None:
 
     # Two ToolCalled transitions (one per candidate) + two FromSpeaker
     # routes back to the selector.
-    tool_called_transitions = [
-        t for t in graph.transitions if t.when.name == "tool_called"
-    ]
-    from_speaker_transitions = [
-        t for t in graph.transitions if t.when.name == "from_speaker"
-    ]
+    tool_called_transitions = [t for t in graph.transitions if t.when.name == "tool_called"]
+    from_speaker_transitions = [t for t in graph.transitions if t.when.name == "from_speaker"]
     assert len(tool_called_transitions) == 2
     assert len(from_speaker_transitions) == 2
 
@@ -121,11 +116,7 @@ def test_auto_pattern_factory_accepts_custom_tool_mapping() -> None:
         candidates=["eng", "legal"],
         handoff_tools={"eng": "ask_engineering", "legal": "ask_legal"},
     )
-    tool_names = sorted(
-        t.when.tool_name
-        for t in graph.transitions
-        if t.when.name == "tool_called"
-    )
+    tool_names = sorted(t.when.tool_name for t in graph.transitions if t.when.name == "tool_called")
     assert tool_names == ["ask_engineering", "ask_legal"]
 
 
@@ -219,11 +210,7 @@ def test_migrates_auto_pattern_with_explicit_selector() -> None:
     graph, _tools = from_classic_pattern(pattern, selector_id="manager")
 
     assert graph.initial_speaker == "manager"
-    candidates_in_handoff = sorted(
-        t.then.agent_id
-        for t in graph.transitions
-        if t.when.name == "tool_called"
-    )
+    candidates_in_handoff = sorted(t.then.agent_id for t in graph.transitions if t.when.name == "tool_called")
     assert candidates_in_handoff == ["bob", "carol"]
 
 

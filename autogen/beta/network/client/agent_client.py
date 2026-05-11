@@ -184,10 +184,7 @@ class AgentClient:
         await inbox.put(envelope)
         handler_status = "ack"
         handler_reason = ""
-        if (
-            envelope.channel_id not in self._handler_suppressed_channels
-            and self._on_envelope is not None
-        ):
+        if envelope.channel_id not in self._handler_suppressed_channels and self._on_envelope is not None:
             try:
                 await self._on_envelope(envelope)
             except Exception as exc:

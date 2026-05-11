@@ -26,7 +26,6 @@ from autogen.beta import Agent
 from autogen.beta.knowledge import DiskKnowledgeStore, MemoryKnowledgeStore
 from autogen.beta.network import (
     EV_TEXT,
-    Envelope,
     Hub,
     HubClient,
     LocalLink,
@@ -52,9 +51,7 @@ async def test_find_envelope_by_causation_returns_reply_after_post() -> None:
     alice_hc = HubClient(link, hub=hub)
     bob_hc = HubClient(link, hub=hub)
 
-    alice = await alice_hc.register(
-        _agent("alice"), Passport(name="alice"), Resume()
-    )
+    alice = await alice_hc.register(_agent("alice"), Passport(name="alice"), Resume())
     await bob_hc.register(
         _agent("bob", "reply from bob"),
         Passport(name="bob"),
@@ -62,7 +59,9 @@ async def test_find_envelope_by_causation_returns_reply_after_post() -> None:
     )
 
     session = await alice.open(type="consulting", target="bob")
-    prompt_id = await session.send("question", audience=[s.agent_id for s in session.metadata.participants if s.agent_id != alice.agent_id])
+    prompt_id = await session.send(
+        "question", audience=[s.agent_id for s in session.metadata.participants if s.agent_id != alice.agent_id]
+    )
 
     # Wait for bob's reply to land.
     reply_envelope = await alice.wait_for_channel_event(
@@ -101,19 +100,15 @@ async def test_find_envelope_by_causation_returns_none_for_unknown() -> None:
     session = await alice.open(type="consulting", target="bob")
 
     # Empty causation — never indexed.
-    assert hub.find_envelope_by_causation(
-        session.channel_id, sender_id=bob.agent_id, causation_id=""
-    ) is None
+    assert hub.find_envelope_by_causation(session.channel_id, sender_id=bob.agent_id, causation_id="") is None
 
     # Bogus causation — index has no such key.
-    assert hub.find_envelope_by_causation(
-        session.channel_id, sender_id=bob.agent_id, causation_id="never-existed"
-    ) is None
+    assert (
+        hub.find_envelope_by_causation(session.channel_id, sender_id=bob.agent_id, causation_id="never-existed") is None
+    )
 
     # Unknown session — also None.
-    assert hub.find_envelope_by_causation(
-        "no-such-session", sender_id=bob.agent_id, causation_id="anything"
-    ) is None
+    assert hub.find_envelope_by_causation("no-such-session", sender_id=bob.agent_id, causation_id="anything") is None
 
     await alice_hc.close()
     await bob_hc.close()
@@ -145,9 +140,7 @@ async def test_causation_index_rebuilt_on_hydrate(tmp_path) -> None:
     )
 
     # Capture bob's id + the reply env id while hub1 is alive.
-    reply_in_hub1 = hub1.find_envelope_by_causation(
-        session.channel_id, sender_id=bob.agent_id, causation_id=prompt_id
-    )
+    reply_in_hub1 = hub1.find_envelope_by_causation(session.channel_id, sender_id=bob.agent_id, causation_id=prompt_id)
     assert reply_in_hub1 is not None
     expected_reply_id = reply_in_hub1.envelope_id
 
@@ -158,9 +151,7 @@ async def test_causation_index_rebuilt_on_hydrate(tmp_path) -> None:
     # Reopen against the same store; index rebuilds from WAL.
     store2 = DiskKnowledgeStore(str(tmp_path))
     hub2 = await Hub.open(store2, ttl_sweep_interval=0)
-    rebuilt = hub2.find_envelope_by_causation(
-        session.channel_id, sender_id=bob.agent_id, causation_id=prompt_id
-    )
+    rebuilt = hub2.find_envelope_by_causation(session.channel_id, sender_id=bob.agent_id, causation_id=prompt_id)
     assert rebuilt is not None
     assert rebuilt.envelope_id == expected_reply_id
 
@@ -201,25 +192,16 @@ async def test_default_handler_dedups_duplicate_invocation() -> None:
     )
 
     wal_before = await hub.read_wal(session.channel_id)
-    bob_text_count_before = sum(
-        1 for e in wal_before
-        if e.event_type == EV_TEXT and e.sender_id == bob.agent_id
-    )
+    bob_text_count_before = sum(1 for e in wal_before if e.event_type == EV_TEXT and e.sender_id == bob.agent_id)
     assert bob_text_count_before == 1
 
     # Re-fetch alice's prompt envelope and re-fire bob's handler against it.
-    alice_prompt = next(
-        e for e in wal_before
-        if e.envelope_id == prompt_id
-    )
+    alice_prompt = next(e for e in wal_before if e.envelope_id == prompt_id)
     await bob.receive(alice_prompt)
 
     # No new reply — dedup short-circuited.
     wal_after = await hub.read_wal(session.channel_id)
-    bob_text_count_after = sum(
-        1 for e in wal_after
-        if e.event_type == EV_TEXT and e.sender_id == bob.agent_id
-    )
+    bob_text_count_after = sum(1 for e in wal_after if e.event_type == EV_TEXT and e.sender_id == bob.agent_id)
     assert bob_text_count_after == bob_text_count_before
     # The original reply is still the latest from bob.
     assert wal_after[-1].envelope_id == first_reply.envelope_id or any(
@@ -388,9 +370,7 @@ async def test_attach_dedups_when_prior_reply_already_landed(tmp_path) -> None:
     )
 
     wal_before = await hub.read_wal(session.channel_id)
-    bob_replies_before = [
-        e for e in wal_before if e.event_type == EV_TEXT and e.sender_id == bob_v1.agent_id
-    ]
+    bob_replies_before = [e for e in wal_before if e.event_type == EV_TEXT and e.sender_id == bob_v1.agent_id]
     assert len(bob_replies_before) == 1
 
     await bob_hc_v1.close()
@@ -404,9 +384,7 @@ async def test_attach_dedups_when_prior_reply_already_landed(tmp_path) -> None:
     )
 
     wal_after = await hub.read_wal(session.channel_id)
-    bob_replies_after = [
-        e for e in wal_after if e.event_type == EV_TEXT and e.sender_id == bob_v2.agent_id
-    ]
+    bob_replies_after = [e for e in wal_after if e.event_type == EV_TEXT and e.sender_id == bob_v2.agent_id]
     assert len(bob_replies_after) == 1  # no dup
 
     await alice_hc.close()

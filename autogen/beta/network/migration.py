@@ -57,9 +57,7 @@ def _participants_in_classic_order(pattern: "Pattern") -> list[str]:
     [initial_agent, ...other agents excluding initial + user, user_agent_last_if_present].
     """
     initial = _agent_name(pattern.initial_agent)
-    user = (
-        _agent_name(pattern.user_agent) if pattern.user_agent is not None else None
-    )
+    user = _agent_name(pattern.user_agent) if pattern.user_agent is not None else None
     seen = {initial}
     if user is not None:
         seen.add(user)
@@ -124,11 +122,7 @@ def from_classic_pattern(
                 "selector_id= — classic's group manager has no agent_id, "
                 "so pick which agent plays the selector role."
             )
-        candidates = [
-            _agent_name(a)
-            for a in pattern.agents
-            if _agent_name(a) != selector_id
-        ]
+        candidates = [_agent_name(a) for a in pattern.agents if _agent_name(a) != selector_id]
         if pattern.user_agent is not None:
             user_name = _agent_name(pattern.user_agent)
             if user_name != selector_id and user_name not in candidates:
@@ -141,14 +135,10 @@ def from_classic_pattern(
         )
 
     if cls_name == "RandomPattern":
-        raise UnsupportedPatternError(
-            "RandomPattern → WorkflowGraph requires RandomTarget (planned)."
-        )
+        raise UnsupportedPatternError("RandomPattern → WorkflowGraph requires RandomTarget (planned).")
 
     if cls_name == "ManualPattern":
-        raise UnsupportedPatternError(
-            "ManualPattern → WorkflowGraph requires HumanClient (planned)."
-        )
+        raise UnsupportedPatternError("ManualPattern → WorkflowGraph requires HumanClient (planned).")
 
     if cls_name == "DefaultPattern":
         # DefaultPattern carries arbitrary per-agent handoffs which
@@ -159,7 +149,4 @@ def from_classic_pattern(
             "the handoffs directly as Transition(when=..., then=...)."
         )
 
-    raise UnsupportedPatternError(
-        f"Unknown classic pattern: {cls_name}. Supported: "
-        f"RoundRobinPattern, AutoPattern."
-    )
+    raise UnsupportedPatternError(f"Unknown classic pattern: {cls_name}. Supported: RoundRobinPattern, AutoPattern.")

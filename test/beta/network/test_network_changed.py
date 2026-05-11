@@ -45,7 +45,7 @@ async def test_list_agents_cached_until_invalidated() -> None:
 
     alice_hc = HubClient(LocalLink(hub), hub=hub)
     bob_hc = HubClient(LocalLink(hub), hub=hub)
-    alice = await alice_hc.register(_agent("alice"), Passport(name="alice"), Resume())
+    await alice_hc.register(_agent("alice"), Passport(name="alice"), Resume())
     await bob_hc.register(_agent("bob"), Passport(name="bob"), Resume())
 
     # Prime the cache from alice's hub client.

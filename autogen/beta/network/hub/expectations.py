@@ -389,9 +389,7 @@ class ProgressWithinEvaluator:
             detail={
                 "elapsed_seconds": latest_elapsed,
                 "threshold_seconds": seconds,
-                "stalled_tasks": sorted(
-                    tid for tid, (_, _, term) in tasks.items() if not term
-                ),
+                "stalled_tasks": sorted(tid for tid, (_, _, term) in tasks.items() if not term),
             },
         )
 

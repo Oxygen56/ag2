@@ -24,22 +24,17 @@ from autogen.beta.network import (
     Passport,
     Resume,
 )
-from autogen.beta.network.adapters.base import ChannelAdapter
 from autogen.beta.network.adapters.conversation import (
-    CONVERSATION_TYPE,
     ConversationAdapter,
-    ConversationState,
 )
 from autogen.beta.network.adapters.discussion import DiscussionAdapter
-from autogen.beta.network.errors import ProtocolError
-from autogen.beta.network.hub.layout import channel_removed_path
 from autogen.beta.network.channel import (
+    ChannelManifest,
     Expectation,
     ParticipantSchema,
-    ChannelManifest,
-    ChannelMetadata,
-    ChannelState,
 )
+from autogen.beta.network.errors import ProtocolError
+from autogen.beta.network.hub.layout import channel_removed_path
 from autogen.beta.testing import TestConfig
 
 from ._helpers import _MockClock
@@ -112,9 +107,9 @@ async def test_min_participation_fires_when_silent_member_lags() -> None:
     audit_lines = (await store.read("/audit/audit.jsonl") or "").strip().splitlines()
     audit_records = [json.loads(line) for line in audit_lines]
     violations = [
-        r for r in audit_records
-        if r.get("kind") == "expectation_violated"
-        and r.get("expectation") == "min_participation"
+        r
+        for r in audit_records
+        if r.get("kind") == "expectation_violated" and r.get("expectation") == "min_participation"
     ]
     assert len(violations) >= 1
     # Bob is silent within the window. Alice posted at t=5 but the
@@ -174,22 +169,13 @@ async def test_progress_within_fires_for_stalled_task() -> None:
     clock.advance(10)
     await hub.evaluate_expectations()
     audit_after_first = (await store.read("/audit/audit.jsonl") or "").strip().splitlines()
-    assert not any(
-        json.loads(ln).get("expectation") == "progress_within"
-        for ln in audit_after_first
-    )
+    assert not any(json.loads(ln).get("expectation") == "progress_within" for ln in audit_after_first)
 
     # Past threshold — should fire.
     clock.advance(60)
     await hub.evaluate_expectations()
-    audit_records = [
-        json.loads(ln)
-        for ln in (await store.read("/audit/audit.jsonl") or "").strip().splitlines()
-    ]
-    violations = [
-        r for r in audit_records
-        if r.get("expectation") == "progress_within"
-    ]
+    audit_records = [json.loads(ln) for ln in (await store.read("/audit/audit.jsonl") or "").strip().splitlines()]
+    violations = [r for r in audit_records if r.get("expectation") == "progress_within"]
     assert len(violations) == 1
     assert bob.agent_id in violations[0]["violators"]
     assert "task-stall-1" in violations[0]["detail"]["stalled_tasks"]
@@ -254,13 +240,8 @@ async def test_progress_within_does_not_fire_after_task_completes() -> None:
     clock.advance(120)
     await hub.evaluate_expectations()
 
-    audit_records = [
-        json.loads(ln)
-        for ln in (await store.read("/audit/audit.jsonl") or "").strip().splitlines()
-    ]
-    assert not any(
-        r.get("expectation") == "progress_within" for r in audit_records
-    )
+    audit_records = [json.loads(ln) for ln in (await store.read("/audit/audit.jsonl") or "").strip().splitlines()]
+    assert not any(r.get("expectation") == "progress_within" for r in audit_records)
 
     await a_hc.close()
     await b_hc.close()
@@ -532,14 +513,8 @@ async def test_turn_within_fires_for_idle_workflow_speaker() -> None:
     clock.advance(120)
     await hub.evaluate_expectations()
 
-    audit_records = [
-        json.loads(ln)
-        for ln in (await store.read("/audit/audit.jsonl") or "").strip().splitlines()
-    ]
-    violations = [
-        r for r in audit_records
-        if r.get("expectation") == "turn_within"
-    ]
+    audit_records = [json.loads(ln) for ln in (await store.read("/audit/audit.jsonl") or "").strip().splitlines()]
+    violations = [r for r in audit_records if r.get("expectation") == "turn_within"]
     assert len(violations) == 1
     assert violations[0]["violators"] == [bob.agent_id]
 
@@ -588,9 +563,7 @@ async def test_turn_within_skipped_for_adapters_without_expected_speaker() -> No
     audit_lines = (await store.read("/audit/audit.jsonl") or "").strip().splitlines()
     audit_records = [json.loads(line) for line in audit_lines]
     # No turn_within violations — adapter state has no expected_next_speaker.
-    assert not any(
-        r.get("expectation") == "turn_within" for r in audit_records
-    )
+    assert not any(r.get("expectation") == "turn_within" for r in audit_records)
 
     await a_hc.close()
     await b_hc.close()

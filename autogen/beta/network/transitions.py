@@ -507,14 +507,10 @@ class TransitionGraph:
         # correctly, and so the graph remains inspectable after
         # serialisation.
         for candidate, tool_name in tools_map.items():
-            transitions.append(
-                Transition(when=ToolCalled(tool_name), then=AgentTarget(candidate))
-            )
+            transitions.append(Transition(when=ToolCalled(tool_name), then=AgentTarget(candidate)))
         # Candidate replies route back to the selector for the next pick.
         for candidate in candidates:
-            transitions.append(
-                Transition(when=FromSpeaker(candidate), then=AgentTarget(selector_id))
-            )
+            transitions.append(Transition(when=FromSpeaker(candidate), then=AgentTarget(selector_id)))
         graph = cls(
             initial_speaker=selector_id,
             transitions=transitions,

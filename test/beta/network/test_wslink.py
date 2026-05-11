@@ -42,7 +42,6 @@ from autogen.beta.network.envelope import (
     EV_CHANNEL_INVITE_ACK,
 )
 from autogen.beta.network.transport.frames import (
-    AcceptFrame,
     ErrorFrame,
     HelloFrame,
     NotifyFrame,

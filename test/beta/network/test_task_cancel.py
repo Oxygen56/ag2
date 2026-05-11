@@ -73,9 +73,7 @@ async def test_task_cancel_emits_event_and_state() -> None:
         cancel_events.append(event)
 
     async with agent.task("long-running") as task:
-        task.context.stream.where(TaskCancelled).subscribe(
-            _capture, sync_to_thread=False
-        )
+        task.context.stream.where(TaskCancelled).subscribe(_capture, sync_to_thread=False)
         await task.cancel("user requested abort")
         # Yield so the subscription delivery completes before we assert.
         await asyncio.sleep(0)
@@ -179,10 +177,7 @@ async def test_cancel_request_verb_posts_envelope() -> None:
     assert "posted" in result.lower() or task_id in result
 
     wal = await hub.read_wal(session.channel_id)
-    cancel_requests = [
-        e for e in wal
-        if e.event_type == EV_TASK_CANCEL_REQUEST and e.task_id == task_id
-    ]
+    cancel_requests = [e for e in wal if e.event_type == EV_TASK_CANCEL_REQUEST and e.task_id == task_id]
     assert len(cancel_requests) == 1
     req = cancel_requests[0]
     assert req.sender_id == alice.agent_id

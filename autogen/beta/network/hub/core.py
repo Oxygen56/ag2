@@ -1319,15 +1319,9 @@ class Hub:
         # ``required`` is the original threshold (or full set for V1
         # all-or-nothing); ``remaining`` is the count of participants
         # who haven't been removed.
-        required = (
-            metadata.required_acks
-            if metadata.required_acks is not None
-            else invitees
-        )
+        required = metadata.required_acks if metadata.required_acks is not None else invitees
         remaining = sum(
-            1
-            for p in metadata.participants
-            if p.agent_id != metadata.creator_id and p.agent_id not in bucket
+            1 for p in metadata.participants if p.agent_id != metadata.creator_id and p.agent_id not in bucket
         )
         envelope = Envelope(
             channel_id=channel_id,
@@ -1489,9 +1483,7 @@ class Hub:
         if not _is_protocol_event(envelope.event_type):
             removed = self._removed_from_channel.get(envelope.channel_id)
             if removed is not None and envelope.sender_id in removed:
-                raise ProtocolError(
-                    f"sender {envelope.sender_id!r} removed from channel {envelope.channel_id!r}"
-                )
+                raise ProtocolError(f"sender {envelope.sender_id!r} removed from channel {envelope.channel_id!r}")
 
         # Per-sender rate limit. Protocol envelopes (acks, opens,
         # expectation violations) bypass so the channel state machine
@@ -1838,9 +1830,7 @@ class Hub:
                     continue
                 if not visible_to(envelope, agent_id):
                     continue
-                await endpoint.send_frame(
-                    NotifyFrame(envelope=envelope, recipient_id=agent_id)
-                )
+                await endpoint.send_frame(NotifyFrame(envelope=envelope, recipient_id=agent_id))
 
     async def _persist_inbox_cursor(self, agent_id: str) -> None:
         """Write-through persistence of ``inbox.cursor``.
@@ -1911,15 +1901,12 @@ class Hub:
         required = self._required_acks(metadata)
 
         if pending + acks < required:
-            await self._transition_channel(
-                metadata.channel_id, ChannelState.CLOSED, "quorum_unreachable"
-            )
+            await self._transition_channel(metadata.channel_id, ChannelState.CLOSED, "quorum_unreachable")
             waiter = self._channel_open_waiters.get(metadata.channel_id)
             if waiter is not None and not waiter.done():
                 waiter.set_exception(
                     ProtocolError(
-                        f"channel {metadata.channel_id!r} quorum_unreachable "
-                        f"(rejected by {envelope.sender_id})"
+                        f"channel {metadata.channel_id!r} quorum_unreachable (rejected by {envelope.sender_id})"
                     )
                 )
             return
@@ -2118,9 +2105,7 @@ class Hub:
             except json.JSONDecodeError:
                 removed_list = []
             if isinstance(removed_list, list):
-                self._removed_from_channel[channel_id] = {
-                    str(a) for a in removed_list if isinstance(a, str)
-                }
+                self._removed_from_channel[channel_id] = {str(a) for a in removed_list if isinstance(a, str)}
 
         adapter = self._adapters.get((metadata.manifest.type, metadata.manifest.version))
         if adapter is None:
