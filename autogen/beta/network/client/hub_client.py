@@ -27,7 +27,7 @@ from ..channel import ChannelMetadata, ChannelState
 from ..envelope import Envelope
 from ..identity import Passport, Resume
 from ..rule import Rule
-from ..transport.frames import ChunkFrame, NotifyFrame
+from ..transport.frames import ChunkFrame, NetworkChangedFrame, NotifyFrame, ReceiptFrame
 from ..transport.local import LocalLink, LocalLinkClient
 from ..views.base import ViewPolicy
 from .agent_client import AgentClient
@@ -65,6 +65,16 @@ class HubClient:
         self._receive_task: asyncio.Task[None] | None = None
         self._clients: dict[str, AgentClient] = {}
         self._closed = False
+
+        # Discovery cache for ``list_agents`` / ``get_agent`` /
+        # ``get_resume`` / ``get_skill``. Each entry is a single result
+        # keyed by call args. A ``NetworkChangedFrame`` from the hub
+        # clears the entire dict — invalidation is event-driven, not
+        # TTL-driven, because the hub is the only writer to the data
+        # we cache. The cache adds no value for in-process callers
+        # (direct hub access is already cheap) but pays for itself
+        # over the wire where every call is a round-trip.
+        self._discovery_cache: dict[tuple[object, ...], object] = {}
 
     # ── Connection ───────────────────────────────────────────────────────────
 
@@ -104,6 +114,12 @@ class HubClient:
                             frame.parent_envelope_id,
                             frame.recipient_id,
                         )
+                elif isinstance(frame, NetworkChangedFrame):
+                    # Hub-pushed cache invalidation. One frame per
+                    # identity mutation; nuke everything we cached
+                    # rather than reasoning about which entries the
+                    # mutation touches.
+                    self._discovery_cache.clear()
                 # Other frame kinds (Accept/Error/Pong/Event) bypass the
                 # demuxer — the in-process send path goes direct via
                 # ``Hub.post_envelope`` so ``AcceptFrame`` is unused here.
@@ -266,13 +282,30 @@ class HubClient:
     # — Discovery —
 
     async def get_agent(self, name_or_id: str) -> Passport:
-        return await self._hub.get_agent(name_or_id)
+        key = ("get_agent", name_or_id)
+        cached = self._discovery_cache.get(key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        passport = await self._hub.get_agent(name_or_id)
+        self._discovery_cache[key] = passport
+        return passport
 
     async def get_resume(self, agent_id: str) -> Resume:
-        return await self._hub.get_resume(agent_id)
+        key = ("get_resume", agent_id)
+        cached = self._discovery_cache.get(key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        resume = await self._hub.get_resume(agent_id)
+        self._discovery_cache[key] = resume
+        return resume
 
     async def get_skill(self, agent_id: str) -> str | None:
-        return await self._hub.get_skill(agent_id)
+        key = ("get_skill", agent_id)
+        if key in self._discovery_cache:
+            return self._discovery_cache[key]  # type: ignore[return-value]
+        skill = await self._hub.get_skill(agent_id)
+        self._discovery_cache[key] = skill
+        return skill
 
     async def list_agents(
         self,
@@ -282,11 +315,45 @@ class HubClient:
         sort_by: str | None = None,
         limit: int = 50,
     ) -> list[Passport]:
-        return await self._hub.list_agents(
+        key = ("list_agents", capability, query, sort_by, limit)
+        cached = self._discovery_cache.get(key)
+        if cached is not None:
+            return list(cached)  # type: ignore[arg-type]
+        result = await self._hub.list_agents(
             capability=capability,
             query=query,
             sort_by=sort_by,
             limit=limit,
+        )
+        self._discovery_cache[key] = result
+        return result
+
+    async def _send_receipt(
+        self,
+        *,
+        envelope_id: str,
+        channel_id: str,
+        status: str,
+        reason: str = "",
+    ) -> None:
+        """Send a ``ReceiptFrame`` back to the hub via the link.
+
+        Hub uses receipts to advance the per-(agent, channel) inbox
+        cursor; a wire reconnect replays only what's past the cursor.
+        Silently skipped if the link isn't open — receipts are a
+        durability optimization, not a correctness primitive (the
+        handler-side ``find_envelope_by_causation`` dedup already
+        absorbs duplicates).
+        """
+        if self._client_link is None:
+            return
+        await self._client_link.send_frame(
+            ReceiptFrame(
+                envelope_id=envelope_id,
+                channel_id=channel_id,
+                status=status,
+                reason=reason,
+            )
         )
 
     # — Identity mutation —
