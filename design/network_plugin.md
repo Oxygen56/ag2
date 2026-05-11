@@ -2,11 +2,25 @@
 
 The `NetworkPlugin` is what attaches an `Agent` to a `Network`. Its responsibilities:
 
-1. Add the 6 LLM tools to `agent.tools` as real `FunctionTool`s — visible at every tool-listing path, callable in any `Agent.ask`, not just inside notify handlers. This is the fix that lets agents **initiate** sessions, not only respond inside them.
+1. Add the **cross-cutting** LLM tools to `agent.tools` as real `FunctionTool`s — `peers`, `channels`, `tasks`, `context`. These are identity-level (work in any channel) and stay on the agent so it can initiate, discover, and observe outside any specific channel.
 2. Register an assembly policy (`NetworkContextPolicy`) that injects network metadata into the prompt, refreshed lazily.
-3. Wire context dependencies (`CHANNEL_DEP`, `AGENT_CLIENT_DEP`, `HUB_DEP`, `TASK_DEP`) on every notify handler entry so the tools can resolve their bindings.
+3. Wire context dependencies (`CHANNEL_DEP`, `AGENT_CLIENT_DEP`, `HUB_DEP`, `CHANNEL_STATE_DEP`, `TASK_DEP`) on every notify handler entry so the tools can resolve their bindings.
+
+**Channel-shaped tools (`say` and any handoff verbs) come from the active channel's adapter**, not the plugin. The default notify handler resolves `adapter.tools_for(client, channel_id, participant_id)` per turn and merges the result with the identity-level set. This keeps adapter-specific verbs visible only where they make sense — workflow agents never see `say` in their tool list, for example.
 
 Plugins are first-class in beta (`autogen/beta/agent.py:1234`); the network plugin uses the existing slot.
+
+## Three layers, one network
+
+The network surfaces capability at three layers; only the third is AG2-LLM-specific:
+
+| Layer | Surface | Used by |
+|---|---|---|
+| **1. Capabilities** | `HubClient` / `Channel` / `AgentClient` Python methods | Any client — `AgentClient`, `HumanClient`, non-AG2 bridges |
+| **2. Envelope helpers** | `adapter.build_text_envelope(...)`, `adapter.build_packet_envelope(...)`, … | Any client constructing protocol-shaped envelopes without going through the AG2 tool decorator |
+| **3. LLM tool wrappers** | `@tool`-decorated callables in `client/tools/` and `adapter.tools_for(...)` | AG2 LLM agents that need JSON-schema-described callables |
+
+The plugin operates at Layer 3. `HumanClient` skips Layer 3 entirely and operates at Layer 1 (with Layer 2 helpers when it needs to construct exotic envelope shapes like workflow's `EV_PACKET`). Non-AG2 bridges (A2A, LangChain, etc.) also bind at Layer 1/2 — they wrap network capabilities in whatever idiom their framework expects.
 
 ## Attachment
 
@@ -15,8 +29,10 @@ The plugin attaches at registration:
 ```python
 hub_client = HubClient(link=LocalLink(hub))
 agent_client = await hub_client.register(agent, identity)
-# By this point, agent.tools includes the 6 verbs and agent's assembly chain
-# includes NetworkContextPolicy.
+# By this point, agent.tools includes the cross-cutting verbs (peers,
+# channels, tasks, context) and agent's assembly chain includes
+# NetworkContextPolicy. Channel-shaped verbs (say, handoff) come from
+# the active adapter per turn, not from the plugin.
 ```
 
 `hub_client.register(...)` internally:
@@ -39,18 +55,22 @@ from autogen.beta.agent import Plugin
 
 
 class NetworkPlugin(Plugin):
-    """Attaches an Agent to a network: adds 6 LLM verbs as Agent tools and
-    registers an assembly policy that injects network metadata into prompts."""
+    """Attaches an Agent to a network: adds cross-cutting LLM verbs as Agent
+    tools and registers an assembly policy that injects network metadata
+    into prompts.
+
+    Channel-shaped verbs (``say``, workflow handoffs) come from the active
+    channel's adapter via ``adapter.tools_for`` — resolved per turn by the
+    default notify handler, not attached statically here."""
 
     def __init__(self, client: AgentClient) -> None:
         super().__init__(
             tools=[
-                make_say_tool(client),
-                make_delegate_tool(client),
                 make_peers_tool(client),
                 make_channels_tool(client),
                 make_tasks_tool(client),
                 make_context_tool(client),
+                make_delegate_tool(client),     # cross-cutting: opens its own consulting channel
             ],
         )
         self._client = client
@@ -150,11 +170,18 @@ from ``fast_depends``, which silently leaves the parameter unresolved.
 The ``default=None`` argument inside ``Inject(...)`` already handles
 the missing-from-deps case.
 
-## The 6 LLM tools
+## LLM tool surface
 
-The surface is **2 flat + 4 grouped**, total 6 registered tools and ~14 distinct actions. Grouping follows the framework-core `_make_knowledge_tool` precedent (`autogen/beta/agent.py:1186`): single tool, action-dispatch body. The pattern keeps the LLM tool list short while exposing more capability per tool.
+Two source streams compose into the LLM's tool list per turn:
 
-### Flat (high-frequency hot path)
+- **Identity-level (attached by `NetworkPlugin`, always available):** `peers`, `channels`, `tasks`, `context`, `delegate`. The four grouped tools plus the one-shot `delegate` convenience. `delegate` is identity-level because it opens its own consulting channel — it doesn't require the caller to already be in one.
+- **Channel-level (provided by `adapter.tools_for(...)`, resolved per turn):** `say` for consulting/conversation/discussion adapters; user-authored handoff verbs for workflow adapters (which return `Handoff(target=, reason=)` from a `@tool` body); nothing for adapters that take no LLM input.
+
+Grouping follows the framework-core `_make_knowledge_tool` precedent (`autogen/beta/agent.py:1186`): single tool, action-dispatch body. The pattern keeps the LLM tool list short while exposing more capability per tool. The default notify handler merges both streams into the per-call tool override passed to `agent.ask`.
+
+`channels(action="open", message=...)` accepts a seed message so an initiator can open and send their first turn atomically — they don't need `say` to be available before they're a participant.
+
+### Channel-level (adapter-provided)
 
 #### `say`
 

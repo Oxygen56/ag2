@@ -244,7 +244,144 @@ async def start(self) -> None:
 
 async def close(self) -> None:
     """Cancel sweepers and bound endpoint tasks; drain queues."""
+
+# ── Observability ───────────────────────────────────────────────────────────
+
+def register_listener(self, listener: HubListener) -> None:
+    """Attach a HubListener. Multiple listeners compose; each is invoked
+    inside a try/except so one buggy listener cannot break dispatch."""
+
+def unregister_listener(self, listener: HubListener) -> None: ...
+
+def health(self) -> dict:
+    """Operational snapshot for a /health endpoint. Cheap to compute from
+    in-memory state. Returns a dict with active_channels, registered_agents,
+    pending_inbox_total, audit_log_bytes, oldest_pending_envelope_age_s."""
+
+# ── Decision-making seam ────────────────────────────────────────────────────
+
+def register_arbiter(self, arbiter: HubArbiter) -> None:
+    """Replace the active HubArbiter. Default is RuleBasedArbiter which
+    enforces per-agent Rule (access + limits) against the current registry."""
+
+# ── Subclass hooks (override; no registration needed) ──────────────────────
+
+async def on_envelope_posted(self, envelope: Envelope, metadata: ChannelMetadata) -> None: ...
+async def on_envelope_rejected(self, envelope: Envelope, reason: NetworkError) -> None: ...
+async def on_channel_opened(self, metadata: ChannelMetadata) -> None: ...
+async def on_channel_closed(self, channel_id: str, reason: str) -> None: ...
+async def on_agent_registered(self, passport: Passport) -> None: ...
+async def on_agent_unregistered(self, agent_id: str) -> None: ...
+async def on_task_event(self, task_id: str, kind: str, payload: dict) -> None: ...
+async def on_expectation_fired(self, channel_id: str, expectation: Expectation, violation: Violation) -> None: ...
+
+# Default impls are `pass`; subclasses override directly. Hub also fires
+# the matching HubListener event so out-of-tree listeners receive it too.
+
+def register_sweeper(
+    self, name: str, interval_seconds: float, fn: Callable[[], Awaitable[None]],
+) -> None:
+    """Attach a custom periodic worker. Starts immediately if Hub.start()
+    has been called; otherwise queued for start()."""
+
+def unregister_sweeper(self, name: str) -> None: ...
 ```
+
+## Listeners, Arbiter, and subclassing
+
+These are the three extension surfaces. Different shapes for different jobs:
+
+| Surface | Shape | Time | Role |
+|---|---|---|---|
+| `HubListener` | Protocol, registered | Read-only, after-the-fact | Observability — audit, metrics, alerts |
+| `HubArbiter` | Protocol, single active instance | Decision-making, inline | Access/limits, federation routing, permission checks |
+| Subclass `on_*` hooks | Methods, overridden | Read-only, after-the-fact | Built-in hub variants that need tight coupling to internal state |
+
+`HubListener` and the `on_*` hooks overlap by design — the hooks are convenient for subclasses (no self-registration), the listener is for third-party plug-ins that don't own the Hub instance. Both fire for every event.
+
+### HubListener
+
+```python
+# autogen/beta/network/hub/listener.py
+
+class HubListener(Protocol):
+    async def on_envelope_posted(self, envelope: Envelope, metadata: ChannelMetadata) -> None: ...
+    async def on_envelope_rejected(self, envelope: Envelope, reason: NetworkError) -> None: ...
+    async def on_dispatch_failed(self, envelope: Envelope, recipient_id: str, reason: Exception) -> None: ...
+    async def on_channel_event(self, channel_id: str, kind: str, payload: dict) -> None: ...
+    async def on_agent_event(self, agent_id: str, kind: str, payload: dict) -> None: ...
+    async def on_expectation_fired(self, channel_id: str, expectation: Expectation, violation: Violation) -> None: ...
+    async def on_turn_failed(self, channel_id: str, agent_id: str, exc: BaseException) -> None: ...
+    async def on_task_event(self, task_id: str, kind: str, payload: dict) -> None: ...
+    async def on_inbox_pressure(self, agent_id: str, pending: int, cap: int) -> None: ...
+```
+
+All methods are async with `pass` as the default body so implementations only override what they care about. `AuditLog` is the built-in default listener — it stays auto-registered and writes `audit.jsonl` exactly as before.
+
+### HubArbiter
+
+```python
+# autogen/beta/network/hub/arbiter.py
+
+@dataclass(slots=True)
+class Allow: ...
+
+@dataclass(slots=True)
+class Deny:
+    reason: str
+    error: type[NetworkError] | None = None    # defaults to AccessDeniedError
+
+Decision = Allow | Deny
+
+
+class HubArbiter(Protocol):
+    async def authorize_send(
+        self, envelope: Envelope, sender: Passport, recipients: list[Passport], rule: Rule,
+    ) -> Decision: ...
+
+    async def authorize_register(self, passport: Passport, resume: Resume, rule: Rule | None) -> Decision: ...
+
+    async def authorize_channel_open(
+        self, manifest: ChannelManifest, initiator: Passport, participants: list[Passport],
+    ) -> Decision: ...
+
+    async def resolve_unknown_audience(
+        self, envelope: Envelope, unknown_ids: list[str],
+    ) -> list[str] | None:
+        """Forwarding hook. Return a (possibly empty) list of agent_ids
+        the envelope should be re-routed to (e.g. a peer hub's local id),
+        or None to keep the current behavior (silently skip unknowns)."""
+```
+
+`RuleBasedArbiter` is the default — it implements `authorize_send` / `authorize_register` / `authorize_channel_open` by reading the per-agent `Rule` (`access` + `limits`) and returns `None` from `resolve_unknown_audience` so unknown audience members are dropped (current single-hub behavior). Tenants replace it with custom arbiters for JWT scope, federation routing, etc. — the seam is what admits those without modifying `Hub.post_envelope`.
+
+### Subclassing
+
+A custom Hub subclass overrides any subset of `on_*` hooks for state that's natural to keep inside the class. The base impl fires the matching `HubListener` event after the hook returns, so a subclass and an external listener can coexist without double-handling.
+
+```python
+class MyHub(Hub):
+    async def on_envelope_posted(self, envelope, metadata):
+        await self._metrics.incr("envelopes_posted", tags={"channel_type": metadata.manifest.type})
+
+    async def on_channel_closed(self, channel_id, reason):
+        await self._db.mark_channel_closed(channel_id, reason)
+```
+
+Subclasses are free to call `register_sweeper` from `__init__` (the sweeper starts when `Hub.start()` runs) for periodic work that doesn't map to any sweeper the framework provides.
+
+Audit kinds are an open set — subclasses append their own (`"my_app.deployment.created"`, etc.) by calling `self._audit_log.append({"kind": ..., ...})`. The built-in kinds stay as module constants for convenience but `AuditLog` does not enforce a closed set.
+
+## Logging
+
+Hub uses standard `logging.getLogger("autogen.beta.network.hub")` (and child loggers per submodule). Levels:
+
+- `INFO` — state transitions (channel opened/closed/expired, agent registered/unregistered, sweeper cycles).
+- `DEBUG` — envelope flow (one line per `post_envelope` accept + dispatch).
+- `WARNING` — rejections (`AccessDeniedError`, `ProtocolError`, `RateLimited`, `InboxFull`).
+- `ERROR` — unexpected exceptions (listener crash, sweeper exception, hydrate failure).
+
+Production embedders configure `logging.config.dictConfig` once; the framework does not install a handler.
 
 ## Internal in-memory caches
 

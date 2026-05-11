@@ -74,10 +74,93 @@ This is the seam future participant types plug into:
 | Impl | What it wraps | Lands |
 |---|---|---|
 | `AgentClient` | An `Agent` running an LLM loop | V1 |
-| `HumanClient` | A queue + UI bridge | TBD |
+| `HumanClient` | A queue + UI bridge | Stabilization |
 | `AdminClient` | Operational tools, no LLM | TBD |
 
 A custom client implementation does not need to inherit from `AgentClient` or vendor any of its internals — implementing the four members of `NetworkClient` is enough.
+
+## HumanClient
+
+`HumanClient` is the non-LLM participant. It satisfies `NetworkClient` directly, holds no `Agent`, and never engages `NetworkPlugin` / `NetworkContextPolicy` (no tool injection, no prompt context). Embedders (CLIs, web apps, WebSocket bridges) drive it from outside the hub through either of two surfaces:
+
+```python
+class HumanClient:
+    @property
+    def agent_id(self) -> str: ...
+    @property
+    def passport(self) -> Passport: ...
+    @property
+    def resume(self) -> Resume: ...
+
+    # ── Outgoing ──
+    async def send(
+        self,
+        channel_id: str,
+        text: str,
+        *,
+        audience: list[str] | None = None,
+        causation_id: str | None = None,
+    ) -> str:
+        """Post EV_TEXT into a channel the human participates in.
+        Returns the stamped envelope_id."""
+
+    async def open(
+        self,
+        *,
+        type: str,
+        target: str | list[str],
+        ttl: str | int | None = None,
+        knobs: dict | None = None,
+        intent: str | None = None,
+    ) -> Channel:
+        """Open a channel as the initiator. Returns the same Channel handle
+        AgentClient.open() returns."""
+
+    async def close_channel(self, channel_id: str, reason: str = "human_closed") -> None: ...
+
+    async def post_envelope(self, envelope: Envelope) -> str:
+        """Escape hatch for custom event_types (e.g. workflow EV_PACKET seeds
+        built via adapter.build_packet_envelope)."""
+
+    # ── Incoming — push ──
+    def on_envelope(self, callback: Callable[[Envelope], Awaitable[None]]) -> None:
+        """Register a coroutine fired per inbound notify. Multiple callbacks
+        compose; exceptions are logged, never propagate to dispatch."""
+
+    # ── Incoming — pull ──
+    async def next_envelope(
+        self,
+        *,
+        predicate: Callable[[Envelope], bool] | None = None,
+        timeout: float | None = None,
+    ) -> Envelope:
+        """Block until the next matching envelope arrives. Raises asyncio.TimeoutError."""
+
+    async def envelopes(self) -> AsyncIterator[Envelope]:
+        """Stream every inbound envelope until disconnect()."""
+
+    async def disconnect(self) -> None: ...
+```
+
+Registration:
+
+```python
+hub_client = HubClient(link=LocalLink(hub))
+passport = Passport(name="reviewer-1", owner="acme", kind="human")
+human = await hub_client.register_human(passport, resume=Resume(summary="approves payouts"))
+```
+
+`HubClient.register_human(...)` is the dedicated entry point. It stamps the passport (same UUID7 path as `register()`), persists under `agents/{id}/`, and returns a `HumanClient`. The agent-flavored `register()` rejects `kind="human"` to keep the two paths obvious.
+
+### What it doesn't try to do
+
+`HumanClient` ships no prompt-the-user logic, no stdin loop, no `human_input_mode`. Those are application policies — they belong above the network primitive. The embedder picks how it surfaces envelopes (CLI prompt, web UI push, WebSocket bridge) and how it accepts replies. The framework guarantees only that:
+
+- `HumanClient` is addressable by `agent_id` and `name` just like any other participant.
+- Channels treat human participants identically — the same `consulting` / `conversation` / `discussion` / `workflow` adapters apply.
+- Envelopes delivered to a `HumanClient` arrive intact; replies go through the same WAL / adapter-validate / dispatch path as agent replies.
+
+This is enough to compose the common HITL patterns (approval gates, mid-conversation interrupts, manual speaker selection in a group, swarm handoff to a human) from existing primitives without bespoke state machines.
 
 ## HubClient
 

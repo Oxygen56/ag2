@@ -123,6 +123,62 @@ This doc is the contract: what failure modes exist, what the framework does abou
 
 **Agent**: nothing extra for the reply pipeline. Side-effecting work inside the handler (database writes, external API calls) needs its own idempotency strategy — the framework can only dedup the reply envelope.
 
+### 12. Notify handler raises
+
+**Symptom**: Default handler's `agent.ask` (or `adapter.build_round_envelope`) raises an exception while processing an inbound envelope.
+
+**Framework**: the handler wraps both calls in `try/except`. On exception:
+1. Emits `HubListener.on_turn_failed(channel_id, agent_id, exc)` to every registered listener.
+2. Appends an `AUDIT_KIND_TURN_FAILED` entry with `channel_id`, `agent_id`, `envelope_id`, exception class, and stringified message.
+3. Logs at `ERROR` under `autogen.beta.network.client.handlers`.
+4. Does **not** crash the receive loop. The channel stays alive; subsequent envelopes flow normally.
+
+No reply envelope is posted (the framework does not invent content on the agent's behalf). The channel's `reply_within` expectation will fire if the protocol expects a response and none arrives.
+
+**Agent**: register a listener to surface the failure in the application's incident pipeline; consider a per-agent retry policy at the embedder level for transient failures (provider 429s, etc.).
+
+### 13. Dispatch fails to a participant
+
+**Symptom**: WAL append succeeded; sending the `NotifyFrame` to a specific recipient raised (endpoint closed, write error, listener rejected).
+
+**Framework**: the per-recipient dispatch is wrapped in try/except. On failure:
+1. Emits `HubListener.on_dispatch_failed(envelope, recipient_id, reason)`.
+2. Logs at `WARNING` under `autogen.beta.network.hub.core`.
+3. Continues delivering to other recipients (one bad endpoint does not block the channel).
+
+**Agent**: peer-disconnect detection at the transport layer (Phase 3) is the durable solution; until then `on_dispatch_failed` is the observability hook for ops dashboards.
+
+### 14. Task mirror cannot reach the hub
+
+**Symptom**: `TaskMirror` observes a terminal task event on the agent's stream but the call to `Hub.observe_task` raises.
+
+**Framework**: the mirror logs at `ERROR`, emits `HubListener.on_task_event(task_id, "mirror_failed", payload)`, and re-tries on next observation. The mirror never crashes the agent's turn — its observation path is best-effort by design — but the failure is no longer silent.
+
+**Agent**: rare in single-process mode; relevant under wire-mode disconnects (Phase 3+).
+
+## How operators see failures
+
+Three production-grade observability primitives turn the failure modes above into actionable signals:
+
+1. **`HubListener`** — subscribe to every state transition via `Hub.register_listener(listener)`. Methods include `on_envelope_posted`, `on_envelope_rejected`, `on_dispatch_failed`, `on_channel_event`, `on_agent_event`, `on_expectation_fired`, `on_turn_failed`, `on_task_event`, `on_inbox_pressure`. The built-in `AuditLog` is one such listener; metrics exporters and dashboard feeds plug in as more.
+2. **Audit log** — `audit.jsonl` is append-only and survives restart. `AuditLog.subscribe(callback)` taps the same stream for live consumption. Audit kinds are an **open set** — subclassing `Hub` or registering custom listeners is the path to project-specific kinds.
+3. **Hub logging** — every module under `autogen.beta.network` uses `logging.getLogger(__name__)`. Levels are uniform: `INFO` for state transitions, `DEBUG` for envelope flow, `WARNING` for rejections, `ERROR` for unexpected. Production embedders configure a handler once via `logging.config.dictConfig`.
+
+For a quick operational read:
+
+```python
+snapshot = hub.health()
+# {
+#   "active_channels": int,
+#   "registered_agents": int,
+#   "pending_inbox_total": int,
+#   "audit_log_bytes": int,
+#   "oldest_pending_envelope_age_s": float | None,
+# }
+```
+
+`health()` is cheap (in-memory). Wire it to a `/health` endpoint or operational dashboard. Empty / zero values mean a quiescent hub; growing `pending_inbox_total` combined with rising `oldest_pending_envelope_age_s` is the canonical "agents are stuck" signal.
+
 ## Configuration knobs
 
 V1 keeps the per-tenant `LimitsBlock` deliberately small — only the

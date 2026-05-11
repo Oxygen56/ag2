@@ -16,7 +16,7 @@ The split mirrors three different readers, mutation rates, and trust models:
 
 Re-registering with the same `name` produces a new `agent_id` and a fresh passport. Resume and `SKILL.md` are passed at registration; resume mutates afterwards via hub-observed task outcomes and (optionally) explicit updates.
 
-V1 ships only `agent`-kind participants. `HumanClient` / `AdminClient` are anticipated by the `NetworkClient` Protocol (see [clients.md](clients.md)) but live in separate FS namespaces (`humans/`, `admins/`) when they ship — V1 does not introduce a `kind` discriminator on `Passport`.
+`Passport.kind` discriminates participant types — `"agent"`, `"human"`, `"remote_agent"`, or `None` (treated as `"agent"` for back-compat). Stabilization adds `HumanClient` as a first-class participant (see [clients.md](clients.md)); `"remote_agent"` is a reserved value for a future federation/A2A bridge, recorded so the discriminator is forward-shaped. All kinds share the same `agents/{id}/` persistence layout — the discriminator drives tool/plugin attachment and discovery filters, not storage.
 
 ## Passport
 
@@ -62,6 +62,8 @@ class Passport:
     cost: CostProfile | None = None
     region: str | None = None
     auth: AuthBlock = field(default_factory=AuthBlock)
+    kind: str | None = None                    # "agent" | "human" | "remote_agent"
+                                                # None ≡ "agent" (back-compat)
     version: int = 1
 
     # Hub-stamped at registration. None on construction.

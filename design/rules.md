@@ -73,6 +73,18 @@ Both blocks are enforced at the **hub**, never the client. This matches the trus
 
 Per-envelope tenant logic (PII redaction, content truncation, audit annotation) belongs in transforms on the AgentClient — Phase 3.
 
+### Rule is consulted by the default arbiter
+
+`Rule` is the data; enforcement runs through `HubArbiter` (see [hub.md](hub.md)). The hub ships `RuleBasedArbiter` as the default — it reads each agent's `Rule` at the moment of decision and returns `Allow()` / `Deny(reason)` to `Hub.post_envelope`, `Hub.register`, and `Hub.create_channel`. This is a refactor, not a behavioral change: the inline checks `Hub.post_envelope` used to perform are now methods on `RuleBasedArbiter`. The same `Rule` instances persist to disk, the same `AccessDeniedError` propagates back to the sender.
+
+The seam matters for what it admits:
+
+- **Custom permission protocols** (JWT scopes, mTLS subject claims, OAuth audience checks) plug in by writing an alternative `HubArbiter` that inspects `Envelope.headers` instead of (or in addition to) the per-agent `Rule`. Existing `Rule` data is still useful as a coarse-grained fallback.
+- **Federation routing** uses `HubArbiter.resolve_unknown_audience` to forward envelopes destined for peer hubs. A federated deployment installs an arbiter that knows the peer-hub topology; an isolated deployment keeps `RuleBasedArbiter`, which returns `None` and drops unknowns (today's behavior).
+- **Mixed-mode** deployments compose arbiters by writing a thin chain (e.g. `CompositeArbiter([JwtScopeArbiter(...), RuleBasedArbiter()])`) — the framework does not ship a Composite type because the right composition strategy depends on the deployment.
+
+Replace via `hub.register_arbiter(MyArbiter(...))` after construction. Only one arbiter is active at a time; the most recent registration wins.
+
 ## Limits invariants
 
 - `max_concurrent_sessions = 0` disables the cap (default).

@@ -214,9 +214,73 @@ class ChannelAdapter(Protocol):
     #     metadata: ChannelMetadata,
     #     state: AdapterState,
     # ) -> list[str] | None: ...
+
+    # ── Per-participant LLM tool surface ────────────────────────────────
+    def tools_for(
+        self,
+        client: "AgentClient",
+        channel_id: str,
+        participant_id: str,
+    ) -> list[Tool]:
+        """Return the LLM tools this adapter offers a participant in this
+        channel. Resolved per turn by the default notify handler and
+        merged with the participant's identity-level tools. Adapters
+        that don't customize delegate to ``default_tools_for`` (returns
+        ``[]``)."""
+
+    # ── Envelope helpers (framework-agnostic; no @tool decorator) ───────
+    def build_text_envelope(
+        self,
+        channel_id: str,
+        sender_id: str,
+        text: str,
+        *,
+        audience: list[str] | None = None,
+        causation_id: str | None = None,
+    ) -> Envelope:
+        """Construct an EV_TEXT envelope shaped for this adapter."""
+
+    def build_packet_envelope(
+        self,
+        channel_id: str,
+        sender_id: str,
+        body: str,
+        *,
+        handoff: "Handoff | None" = None,
+        context_set: dict | None = None,
+        audience: list[str] | None = None,
+        causation_id: str | None = None,
+    ) -> Envelope:
+        """Construct an EV_PACKET envelope. ``WorkflowAdapter`` uses
+        ``handoff`` / ``context_set``; other adapters typically delegate
+        to ``default_build_packet_envelope`` (no handoff, no context_set)."""
 ```
 
 Adapters are stateless and pure. Every decision derives from `(metadata, AdapterState)`. The hub caches the latest folded state per session in memory and reconstructs it from the WAL on `hydrate()`. **`validate_send` and `on_accepted` are O(1), not O(WAL)** — this is the load-bearing fix vs. the original design and is what lets a 1000-turn discussion stay fast.
+
+### Three layers, one adapter
+
+The adapter is the source of truth for three distinct surfaces:
+
+```
+Layer 1 — Capabilities       — what any client can do via Hub / Channel APIs
+Layer 2 — Envelope helpers   — adapter.build_text_envelope / build_packet_envelope etc.
+                                Pure constructors; any client uses them (AG2, A2A bridges,
+                                HumanClient, custom non-AG2 LLM frameworks).
+Layer 3 — LLM-tool wrappers  — adapter.tools_for(...) — AG2 LLM agents see these
+                                in their tool list when they take a turn in this channel.
+```
+
+`tools_for` is resolved per turn by the default notify handler. The adapter decides which verbs make sense in its protocol:
+
+| Adapter | `tools_for` default |
+|---|---|
+| `consulting` | `[say]` for the initiator's first turn; `[]` afterwards |
+| `conversation` | `[say]` |
+| `discussion` | `[say]` for the participant whose turn it is, `[]` otherwise |
+| `workflow` | `[]` — handoff tools are user-authored `@tool` functions returning `Handoff(target=, reason=)` |
+
+This is what eliminates the structural conflict where an LLM in a workflow channel sees `say` in its tool list and gets a `ProtocolError` for using it: workflow simply doesn't offer `say`. Non-AG2 bridges skip Layer 3 entirely; they call `adapter.build_packet_envelope(...)` directly and post via `HubClient.post_envelope(envelope)`.
 
 ## Expectations
 

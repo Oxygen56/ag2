@@ -282,6 +282,19 @@ Exit: ✅ Validated by 26 in-tree integration tests in `test/beta/network/test_m
 
 See [workflow.md](workflow.md) for the full design.
 
+### Phase 1 stabilization — release hardening (in progress)
+
+Phase 1 (M1–M4) is code-complete. Stabilization is the work that takes it from "passing tests" to "ready for the minor-version release". Six themes, four stacked PRs (see [PR_PLAN.md](PR_PLAN.md) for the publication detail):
+
+1. **Native human-in-the-loop** — `HumanClient` as a peer of `AgentClient`. The `NetworkClient` Protocol was always shaped for this; stabilization fills it in. `Passport.kind: Literal["agent", "human", "remote_agent"] | None` discriminates without breaking back-compat (`None` ≡ `"agent"`). Push (callback) + pull (`next_envelope`, `envelopes` iterator) for embedder UIs. Unblocks workflow smokes that today fake an external caller through `agent.ask`.
+2. **Observability — `HubListener`** — read-only Protocol for state-transition notifications (envelope posted/rejected, dispatch failed, channel events, agent events, expectation fired, turn failed, task event, inbox pressure). Existing `AuditLog` becomes one listener. Notify-handler exceptions are trapped + emitted instead of disappearing. Hub-level logging, `Hub.health()` snapshot.
+3. **Decision-making seam — `HubArbiter`** — Protocol that lifts the inline access/limits checks out of `Hub.post_envelope`. Default `RuleBasedArbiter` preserves current behavior. Forward-compatible with federation (`resolve_unknown_audience` returns the routing target) and future permission protocols (JWT scope, mTLS) without modifying the hub.
+4. **Adapter-owned tool surface** — `ChannelAdapter` gains `tools_for(client, channel_id, participant_id)` returning the adapter's applicable LLM tools, plus Layer-2 envelope helpers (`build_text_envelope`, `build_packet_envelope`, …) that any client uses without going through the AG2 tool decorator. `NetworkPlugin` shrinks to cross-cutting tools (`peers`/`channels`/`tasks`/`context`); `say` moves into consulting/conversation/discussion adapters; workflow ships no `say`. Eliminates the structural conflict where an LLM in a workflow channel calls `say` and gets a `ProtocolError`.
+5. **Subclass-friendly Hub** — empty `on_*` lifecycle hooks subclasses override; `Hub.register_sweeper(name, interval, callable)` extends the sweeper surface; audit kinds open set. Out-of-tree Hub subclasses become viable; no concrete subclasses ship in this repo.
+6. **Latent bug pass** — `TaskMirror` no longer swallows hub-side failures silently (escalates via `HubListener` + log); `_causation_index` pruned on terminal channel transition (memory growth fix); inbox-pressure surfaced through `HubListener`.
+
+The architectural seams in (2)–(5) are deliberately shaped to admit federation, cross-process semantics, and richer permission protocols later without further restructuring.
+
 ### Phase 2.0 — Durability and adoption ✅ shipped
 
 The unmet need: long-running sessions and workflows that survive interruption and resume without starting over. AG2-classic's `GroupChat` can't do this natively; users have asked for it repeatedly. V1 ships durable WAL + deterministic fold, so the hub-side state already survives restart — the gap is the agent-side activation mechanism.
