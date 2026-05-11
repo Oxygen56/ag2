@@ -26,6 +26,8 @@ __all__ = (
     "EV_EXPECTATION_VIOLATED",
     "EV_PACKET",
     "EV_QUORUM_CHANGED",
+    "EV_TASK_CANCEL_REQUEST",
+    "EV_TASK_CANCELLED",
     "EV_TEXT",
     "Envelope",
     "Priority",
@@ -74,6 +76,15 @@ EV_CHANNEL_EXPIRED = "ag2.channel.expired"
 EV_QUORUM_CHANGED = "ag2.channel.quorum_changed"
 
 EV_EXPECTATION_VIOLATED = "ag2.expectation.violated"
+
+# Task cancellation:
+# * ``EV_TASK_CANCEL_REQUEST`` — peer asks the owner to cancel a task.
+#   ``event_data`` carries ``{"task_id": str, "reason": str}``. Owners
+#   are free to honour or ignore — cancellation is owner-driven.
+# * ``EV_TASK_CANCELLED`` — terminal task event mirrored from the
+#   owner's stream. Carries ``{"task_id": str, "reason": str}``.
+EV_TASK_CANCEL_REQUEST = "ag2.task.cancel_request"
+EV_TASK_CANCELLED = "ag2.task.cancelled"
 
 # Channel-scoped context variable mutation.
 # The ``event_data`` shape:
