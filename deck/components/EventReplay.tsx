@@ -43,6 +43,13 @@ export type Hub = {
   box: [number, number, number, number]; // x, y, w, h
 };
 
+export type Phase = {
+  id: string;
+  label: string;
+  start: number;
+  end: number;
+};
+
 export type ReplayData = {
   participants: Participant[];
   channels: Channel[];
@@ -50,6 +57,7 @@ export type ReplayData = {
   events: EventStep[];
   duration: number;
   hubs?: Hub[];
+  phases?: Phase[];
   width?: number;
   height?: number;
 };
@@ -61,11 +69,23 @@ const COLORS: Record<Envelope["type"], string> = {
   protocol: "var(--ink-mute)",
 };
 
+const TYPE_LABEL: Record<Envelope["type"], string> = {
+  text: "message",
+  task: "task event",
+  handoff: "handoff",
+  protocol: "protocol",
+};
+
 const formatT = (s: number) => {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${String(sec).padStart(2, "0")}`;
 };
+
+// envelope flight duration (slowed for visibility)
+const ENV_DUR = 1.1;
+// how long after an envelope lands its participants stay highlighted
+const ACTIVE_LINGER = 1.4;
 
 export function EventReplay({ data }: { data: ReplayData }) {
   const [t, setT] = useState(0);
@@ -125,38 +145,37 @@ export function EventReplay({ data }: { data: ReplayData }) {
   const aboutToLeave = (p: Participant) =>
     p.leaveTime !== undefined && p.leaveTime - t < 1 && p.leaveTime > t;
 
-  const ENV_DUR = 0.7;
   const inFlight = data.envelopes.filter(
     (env) => env.t <= t && env.t + ENV_DUR > t
   );
 
-  const activeChannels = data.channels.filter(
-    (c) => c.openTime <= t && (c.closeTime === undefined || c.closeTime > t)
+  // recent envelopes — used to spotlight active participants even briefly after delivery
+  const recentEnvelopes = data.envelopes.filter(
+    (env) => env.t <= t && env.t + ENV_DUR + ACTIVE_LINGER > t
   );
+  const activeIds = new Set<string>();
+  for (const e of recentEnvelopes) {
+    activeIds.add(e.from);
+    activeIds.add(e.to);
+  }
+  // also light up anyone who just joined
+  for (const p of activeParticipants) {
+    if (justJoined(p)) activeIds.add(p.id);
+  }
+  const hasAnyActivity = activeIds.size > 0;
 
   const passed = data.events.filter((e) => e.t <= t);
-  const recent = passed.slice(-6);
+  const currentEvent = passed[passed.length - 1];
+  const previousEvents = passed.slice(-5, -1).reverse();
 
   const W = data.width ?? 800;
   const H = data.height ?? 480;
 
-  // channel edges between active participants
-  const seenEdges = new Set<string>();
-  const channelEdges: { from: Participant; to: Participant }[] = [];
-  for (const ch of activeChannels) {
-    const inCh = ch.participants
-      .map((id) => activeParticipants.find((p) => p.id === id))
-      .filter(Boolean) as Participant[];
-    for (let i = 0; i < inCh.length; i++) {
-      for (let j = i + 1; j < inCh.length; j++) {
-        const key = [inCh[i].id, inCh[j].id].sort().join("-");
-        if (!seenEdges.has(key)) {
-          seenEdges.add(key);
-          channelEdges.push({ from: inCh[i], to: inCh[j] });
-        }
-      }
-    }
-  }
+  // phase logic
+  const phases = data.phases ?? [];
+  const currentPhaseIndex = phases.findIndex(
+    (p) => p.start <= t && p.end > t
+  );
 
   const onReset = () => {
     setT(0);
@@ -165,27 +184,82 @@ export function EventReplay({ data }: { data: ReplayData }) {
 
   return (
     <div ref={containerRef} className="replay">
-      <div className="replay-status">
-        <div className="replay-time">
-          <span className="replay-time-label">t</span>
-          <span className="replay-time-value">{formatT(t)}</span>
-          <span className="replay-time-total">/ {formatT(data.duration)}</span>
+      {/* Phase stepper */}
+      {phases.length > 0 && (
+        <div className="replay-phases">
+          {phases.map((phase, i) => {
+            const isCurrent = i === currentPhaseIndex;
+            const isPast = phase.end <= t;
+            const progress = isCurrent
+              ? Math.min(1, Math.max(0, (t - phase.start) / (phase.end - phase.start)))
+              : isPast
+              ? 1
+              : 0;
+            return (
+              <div
+                key={phase.id}
+                className={`replay-phase ${
+                  isCurrent ? "current" : isPast ? "past" : "future"
+                }`}
+              >
+                <div className="replay-phase-dot">
+                  {isCurrent ? (
+                    <svg viewBox="0 0 16 16" width="16" height="16">
+                      <circle cx="8" cy="8" r="7" fill="none" stroke="var(--channel-soft)" strokeWidth="1.5" />
+                      <path
+                        d={`M 8 1 A 7 7 0 ${progress > 0.5 ? 1 : 0} 1 ${
+                          8 + 7 * Math.sin(progress * Math.PI * 2)
+                        } ${8 - 7 * Math.cos(progress * Math.PI * 2)} L 8 8 Z`}
+                        fill="var(--channel)"
+                        opacity="0.85"
+                      />
+                    </svg>
+                  ) : isPast ? (
+                    <svg viewBox="0 0 16 16" width="16" height="16">
+                      <circle cx="8" cy="8" r="6" fill="var(--channel)" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 16 16" width="16" height="16">
+                      <circle cx="8" cy="8" r="6" fill="none" stroke="var(--line-strong)" strokeWidth="1.2" />
+                    </svg>
+                  )}
+                </div>
+                <div className="replay-phase-label">
+                  <div className="replay-phase-num">
+                    {String(i + 1).padStart(2, "0")}
+                  </div>
+                  <div className="replay-phase-name">{phase.label}</div>
+                </div>
+                {i < phases.length - 1 && <div className="replay-phase-bar" />}
+              </div>
+            );
+          })}
+          <div className="replay-phase-time">{formatT(t)}</div>
         </div>
-        <div className="replay-counts">
-          <span>
-            <strong>{activeParticipants.length}</strong> participants
-          </span>
-          <span>
-            <strong>{activeChannels.length}</strong> active channel
-            {activeChannels.length === 1 ? "" : "s"}
-          </span>
+      )}
+
+      {/* Now-playing banner */}
+      <div className="replay-now">
+        <div className="replay-now-stamp">
+          {currentEvent ? formatT(currentEvent.t) : "—"}
+          <span className="replay-now-tick" />
         </div>
-        <div className="replay-channels">
-          {activeChannels.map((c) => (
-            <span key={c.id} className={`pill ${c.type === "workflow" ? "id" : "ch"}`}>
-              {c.label}
+        <div className="replay-now-body">
+          <div className={`replay-now-text kind-${currentEvent?.kind ?? "info"}`}>
+            {currentEvent ? currentEvent.text : "awaiting first event…"}
+          </div>
+          <div className="replay-now-meta">
+            <span>
+              {activeParticipants.length} participant
+              {activeParticipants.length === 1 ? "" : "s"}
             </span>
-          ))}
+            <span>·</span>
+            <span>{data.channels.filter(
+              (c) => c.openTime <= t && (c.closeTime === undefined || c.closeTime > t)
+            ).length} active channel{data.channels.filter(
+              (c) => c.openTime <= t && (c.closeTime === undefined || c.closeTime > t)
+            ).length === 1 ? "" : "s"}</span>
+          </div>
         </div>
       </div>
 
@@ -215,28 +289,17 @@ export function EventReplay({ data }: { data: ReplayData }) {
               </g>
             ))}
 
-            {channelEdges.map((edge, i) => (
-              <line
-                key={i}
-                x1={edge.from.x}
-                y1={edge.from.y}
-                x2={edge.to.x}
-                y2={edge.to.y}
-                stroke="var(--channel-soft)"
-                strokeWidth={0.7}
-                strokeOpacity={0.45}
-              />
-            ))}
-
             {activeParticipants.map((p) => {
               const joining = justJoined(p);
               const leaving = aboutToLeave(p);
+              const isActive = !hasAnyActivity || activeIds.has(p.id);
               const fadeIn = joining ? Math.min(1, (t - (p.joinTime ?? 0)) / 0.7) : 1;
               const fadeOut = leaving
                 ? Math.max(0.25, ((p.leaveTime ?? Infinity) - t) / 1)
                 : 1;
-              const opacity = Math.min(fadeIn, fadeOut);
-              const r = joining ? 16 + (1 - fadeIn) * 12 : 20;
+              const baseOpacity = Math.min(fadeIn, fadeOut);
+              const opacity = baseOpacity * (isActive ? 1 : 0.38);
+              const r = joining ? 18 + (1 - fadeIn) * 12 : 22;
               const stroke =
                 p.kind === "human"
                   ? "var(--ink-soft)"
@@ -245,14 +308,26 @@ export function EventReplay({ data }: { data: ReplayData }) {
                   : "var(--identity)";
               return (
                 <g key={p.id} opacity={opacity}>
+                  {/* glow ring for active */}
+                  {isActive && !joining && (
+                    <circle
+                      cx={p.x}
+                      cy={p.y}
+                      r={r + 6}
+                      fill="none"
+                      stroke="var(--channel)"
+                      strokeWidth={1.2}
+                      opacity={0.5}
+                    />
+                  )}
                   {joining && (
                     <circle
                       cx={p.x}
                       cy={p.y}
-                      r={r + 8}
+                      r={r + 10}
                       fill="none"
                       stroke="var(--action)"
-                      strokeWidth={1}
+                      strokeWidth={1.2}
                       opacity={0.6 * (1 - fadeIn)}
                     />
                   )}
@@ -262,7 +337,7 @@ export function EventReplay({ data }: { data: ReplayData }) {
                     r={r}
                     fill="var(--card)"
                     stroke={stroke}
-                    strokeWidth={1.5}
+                    strokeWidth={isActive ? 2 : 1.5}
                     strokeDasharray={p.kind === "human" ? "3 3" : undefined}
                   />
                   <text
@@ -270,7 +345,7 @@ export function EventReplay({ data }: { data: ReplayData }) {
                     y={p.y + 3}
                     textAnchor="middle"
                     style={{
-                      fontSize: 9.5,
+                      fontSize: 10,
                       fontWeight: 600,
                       fill: "var(--ink)",
                       fontFamily: "var(--mono)",
@@ -281,11 +356,11 @@ export function EventReplay({ data }: { data: ReplayData }) {
                   {p.device && (
                     <text
                       x={p.x}
-                      y={p.y + 38}
+                      y={p.y + 42}
                       textAnchor="middle"
                       style={{
-                        fontSize: 9,
-                        fill: "var(--ink-mute)",
+                        fontSize: 9.5,
+                        fill: isActive ? "var(--ink-soft)" : "var(--ink-mute)",
                         fontFamily: "var(--mono)",
                         letterSpacing: "0.04em",
                       }}
@@ -294,35 +369,60 @@ export function EventReplay({ data }: { data: ReplayData }) {
                     </text>
                   )}
                   {joining && (
-                    <text
-                      x={p.x}
-                      y={p.y - 30}
-                      textAnchor="middle"
-                      style={{
-                        fontSize: 9.5,
-                        fontWeight: 600,
-                        fill: "var(--action)",
-                        fontFamily: "var(--mono)",
-                        opacity: fadeIn,
-                      }}
-                    >
-                      + joined
-                    </text>
+                    <g>
+                      <rect
+                        x={p.x - 38}
+                        y={p.y - 50}
+                        width={76}
+                        height={20}
+                        rx={10}
+                        fill="var(--action-pale)"
+                        stroke="var(--action)"
+                        strokeWidth={1}
+                        opacity={fadeIn}
+                      />
+                      <text
+                        x={p.x}
+                        y={p.y - 36}
+                        textAnchor="middle"
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          fill: "var(--action)",
+                          fontFamily: "var(--mono)",
+                          opacity: fadeIn,
+                        }}
+                      >
+                        + joined
+                      </text>
+                    </g>
                   )}
                   {leaving && (
-                    <text
-                      x={p.x}
-                      y={p.y - 30}
-                      textAnchor="middle"
-                      style={{
-                        fontSize: 9.5,
-                        fontWeight: 600,
-                        fill: "var(--ink-mute)",
-                        fontFamily: "var(--mono)",
-                      }}
-                    >
-                      − leaving
-                    </text>
+                    <g>
+                      <rect
+                        x={p.x - 40}
+                        y={p.y - 50}
+                        width={80}
+                        height={20}
+                        rx={10}
+                        fill="var(--card-2)"
+                        stroke="var(--ink-mute)"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={p.x}
+                        y={p.y - 36}
+                        textAnchor="middle"
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          fill: "var(--ink-mute)",
+                          fontFamily: "var(--mono)",
+                        }}
+                      >
+                        − leaving
+                      </text>
+                    </g>
                   )}
                 </g>
               );
@@ -333,37 +433,55 @@ export function EventReplay({ data }: { data: ReplayData }) {
               const to = data.participants.find((p) => p.id === env.to);
               if (!from || !to) return null;
               const progress = (t - env.t) / ENV_DUR;
-              const ease = progress; // linear is fine; envelope is a discrete move
-              const ex = from.x + (to.x - from.x) * ease;
-              const ey = from.y + (to.y - from.y) * ease;
+              const ex = from.x + (to.x - from.x) * progress;
+              const ey = from.y + (to.y - from.y) * progress;
               const color = COLORS[env.type];
               return (
                 <g key={i}>
+                  {/* trail line */}
                   <line
                     x1={from.x}
                     y1={from.y}
                     x2={ex}
                     y2={ey}
                     stroke={color}
-                    strokeWidth={1}
-                    strokeOpacity={0.4}
-                    strokeDasharray="2 3"
+                    strokeWidth={1.4}
+                    strokeOpacity={0.5}
+                    strokeDasharray="3 4"
                   />
-                  <circle cx={ex} cy={ey} r={5} fill={color} />
-                  {env.label && progress < 0.55 && (
-                    <text
-                      x={ex}
-                      y={ey - 12}
-                      textAnchor="middle"
-                      style={{
-                        fontSize: 10,
-                        fill: color,
-                        fontFamily: "var(--mono)",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {env.label}
-                    </text>
+                  {/* outer glow */}
+                  <circle cx={ex} cy={ey} r={11} fill={color} opacity={0.18} />
+                  {/* dot */}
+                  <circle cx={ex} cy={ey} r={6} fill={color} />
+                  {/* label — visible most of the flight */}
+                  {env.label && progress < 0.85 && (
+                    <g>
+                      <rect
+                        x={ex - 50}
+                        y={ey - 30}
+                        width={100}
+                        height={18}
+                        rx={9}
+                        fill="var(--card)"
+                        stroke={color}
+                        strokeWidth={1}
+                        opacity={Math.min(1, (1 - progress) * 1.6)}
+                      />
+                      <text
+                        x={ex}
+                        y={ey - 17}
+                        textAnchor="middle"
+                        style={{
+                          fontSize: 10,
+                          fill: color,
+                          fontFamily: "var(--mono)",
+                          fontWeight: 500,
+                          opacity: Math.min(1, (1 - progress) * 1.6),
+                        }}
+                      >
+                        {env.label}
+                      </text>
+                    </g>
                   )}
                 </g>
               );
@@ -372,20 +490,17 @@ export function EventReplay({ data }: { data: ReplayData }) {
         </div>
 
         <div className="replay-log">
-          <div className="replay-log-head">event log</div>
+          <div className="replay-log-head">recent activity</div>
           <ol>
-            {recent.map((e, i) => {
-              const isLast = i === recent.length - 1;
-              return (
-                <li key={`${e.t}-${i}`} className={isLast ? "current" : ""}>
-                  <span className="ts">{formatT(e.t)}</span>
-                  <span className={`text kind-${e.kind ?? "info"}`}>{e.text}</span>
-                </li>
-              );
-            })}
-            {recent.length === 0 && (
-              <li className="empty">…awaiting first event…</li>
+            {previousEvents.length === 0 && currentEvent && (
+              <li className="empty">— this is the start —</li>
             )}
+            {previousEvents.map((e, i) => (
+              <li key={`${e.t}-${i}`}>
+                <span className="ts">{formatT(e.t)}</span>
+                <span className={`text kind-${e.kind ?? "info"}`}>{e.text}</span>
+              </li>
+            ))}
           </ol>
           <div className="replay-legend">
             <span>
@@ -426,6 +541,7 @@ export function EventReplay({ data }: { data: ReplayData }) {
           }}
           className="replay-scrub"
         />
+        <span className="replay-time-readout">{formatT(t)}</span>
         <button className="replay-btn replay-btn-icon" onClick={onReset} title="Reset">
           ↻
         </button>
