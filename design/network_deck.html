@@ -1,0 +1,2387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AG2 Network — An Action-Driven Network for Agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #0F1620;
+    --ink-2: #131C28;
+    --surface: #1A2330;
+    --surface-2: #232E3D;
+    --card: #1E2937;
+    --line: #2A3441;
+    --line-soft: #222C3A;
+
+    --paper: #ECE3D0;
+    --paper-dim: #B5AC9B;
+    --paper-mute: #6F7585;
+
+    --channel: #6FB8C9;
+    --channel-soft: #3D7585;
+    --identity: #E0A36B;
+    --identity-soft: #8F6541;
+    --action: #A4C476;
+    --action-soft: #5F7745;
+    --violation: #D67A6B;
+    --violation-soft: #84483F;
+    --highlight: #F5EAD0;
+
+    --display: "Fraunces", Georgia, serif;
+    --body: "Inter", -apple-system, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+
+    --rad: 4px;
+    --max: 1180px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.55;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* selection */
+  ::selection { background: var(--identity); color: var(--ink); }
+
+  /* ─── ambient grid layer ──────────────────────────────────────── */
+  .grid-bg {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-position: -1px -1px;
+    opacity: 0.35;
+    mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, black 30%, transparent 80%);
+  }
+
+  /* ─── top mini-nav ─────────────────────────────────────────────── */
+  header.top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(15, 22, 32, 0.86);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .top-inner {
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 14px 28px;
+    display: flex; align-items: baseline; gap: 28px;
+  }
+  .brand {
+    font-family: var(--display);
+    font-weight: 500;
+    font-variation-settings: "opsz" 24, "SOFT" 30;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+    color: var(--paper);
+    text-decoration: none;
+  }
+  .brand span.dot { color: var(--channel); }
+  nav.mini {
+    display: flex; gap: 22px;
+    font-size: 13px;
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+  nav.mini a {
+    color: var(--paper-dim);
+    text-decoration: none;
+    transition: color 0.15s ease;
+  }
+  nav.mini a:hover { color: var(--channel); }
+
+  /* ─── section scaffolding ──────────────────────────────────────── */
+  main { position: relative; z-index: 1; }
+  section {
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 96px 28px 64px;
+    position: relative;
+  }
+  section.wide { max-width: 1320px; }
+  section.full {
+    max-width: none;
+    padding-left: max(28px, calc((100vw - var(--max)) / 2));
+    padding-right: max(28px, calc((100vw - var(--max)) / 2));
+  }
+
+  .marker {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--channel);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .marker::before {
+    content: ""; width: 36px; height: 1px; background: var(--channel);
+    display: inline-block;
+  }
+
+  h1.display {
+    font-family: var(--display);
+    font-weight: 400;
+    font-variation-settings: "opsz" 144, "SOFT" 30;
+    font-size: clamp(48px, 6.5vw, 92px);
+    line-height: 1.02;
+    letter-spacing: -0.025em;
+    margin: 0 0 28px;
+    color: var(--paper);
+  }
+  h1.display em {
+    font-style: italic;
+    font-variation-settings: "opsz" 144, "SOFT" 100;
+    color: var(--channel);
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 400;
+    font-variation-settings: "opsz" 72, "SOFT" 50;
+    font-size: clamp(36px, 4vw, 56px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0 0 24px;
+    color: var(--paper);
+  }
+  h2 em {
+    font-style: italic;
+    font-variation-settings: "opsz" 72, "SOFT" 100;
+    color: var(--channel);
+  }
+  h2 .accent-i { color: var(--identity); font-style: italic; }
+  h2 .accent-a { color: var(--action); font-style: italic; }
+
+  h3 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-variation-settings: "opsz" 24;
+    font-size: 22px;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    color: var(--paper);
+  }
+
+  h4 {
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--paper-mute);
+    margin: 0 0 10px;
+  }
+
+  p {
+    color: var(--paper);
+    max-width: 64ch;
+    margin: 0 0 18px;
+  }
+  p.lead {
+    font-family: var(--display);
+    font-weight: 300;
+    font-variation-settings: "opsz" 36;
+    font-size: clamp(20px, 1.8vw, 26px);
+    line-height: 1.4;
+    color: var(--paper);
+    max-width: 38ch;
+    margin-bottom: 32px;
+    letter-spacing: -0.005em;
+  }
+  p.dim { color: var(--paper-dim); }
+  p.small { font-size: 14px; color: var(--paper-dim); }
+
+  em.term {
+    font-style: normal;
+    color: var(--identity);
+    font-variation-settings: "opsz" 24;
+  }
+  em.term-c { font-style: normal; color: var(--channel); }
+  em.term-a { font-style: normal; color: var(--action); }
+
+  code, .code-inline {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    color: var(--channel);
+    background: rgba(111, 184, 201, 0.07);
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    background: var(--ink-2);
+    color: var(--paper);
+    padding: 22px 24px;
+    border-radius: var(--rad);
+    border: 1px solid var(--line);
+    overflow-x: auto;
+    margin: 24px 0;
+  }
+  pre .kw { color: var(--identity); }
+  pre .str { color: var(--action); }
+  pre .com { color: var(--paper-mute); font-style: italic; }
+  pre .num { color: var(--channel); }
+  pre .fn { color: var(--channel); }
+  pre .cls { color: var(--identity); }
+
+  /* ─── hero ──────────────────────────────────────────────────────── */
+  .hero {
+    min-height: 88vh;
+    padding-top: 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+  }
+  .hero-tagline {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--channel);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 32px;
+  }
+  .hero-tagline::before {
+    content: "◆ "; color: var(--identity);
+  }
+  .hero-sub {
+    font-family: var(--display);
+    font-weight: 300;
+    font-variation-settings: "opsz" 48;
+    font-size: clamp(22px, 2vw, 30px);
+    line-height: 1.32;
+    color: var(--paper-dim);
+    max-width: 36ch;
+    margin: 0 0 56px;
+  }
+  .hero-vis {
+    position: absolute;
+    right: -40px;
+    top: 50%;
+    width: 56%;
+    max-width: 720px;
+    transform: translateY(-50%);
+    opacity: 0.85;
+    pointer-events: none;
+  }
+  .hero-byline {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--paper-mute);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    display: flex; gap: 28px; flex-wrap: wrap;
+  }
+  .hero-byline span::before {
+    content: "—— "; color: var(--channel-soft);
+  }
+
+  /* ─── two-col layouts ──────────────────────────────────────────── */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    align-items: start;
+  }
+  .grid-2.wider { grid-template-columns: 1.1fr 1fr; }
+  .grid-2.narrower { grid-template-columns: 1fr 1.4fr; }
+  @media (max-width: 860px) {
+    .grid-2, .grid-2.wider, .grid-2.narrower { grid-template-columns: 1fr; gap: 32px; }
+    .hero-vis { display: none; }
+  }
+  .grid-3 {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+  }
+  @media (max-width: 860px) {
+    .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  /* ─── cards ────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--rad);
+    padding: 26px 26px 22px;
+    position: relative;
+  }
+  .card .badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--paper-mute);
+    margin-bottom: 14px;
+    display: flex; gap: 8px; align-items: center;
+  }
+  .card.identity .badge { color: var(--identity); }
+  .card.channel .badge { color: var(--channel); }
+  .card.action .badge { color: var(--action); }
+  .card .badge::before {
+    content: ""; width: 8px; height: 8px; display: inline-block;
+    background: currentColor; border-radius: 50%;
+  }
+  .card h3 { margin-bottom: 8px; }
+  .card p { font-size: 14px; color: var(--paper-dim); margin-bottom: 0; max-width: none; }
+
+  /* ─── annotation strip ─────────────────────────────────────────── */
+  .meta-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    margin: 40px 0;
+  }
+  .meta-strip > div {
+    padding: 24px 24px 24px 0;
+    border-left: 1px solid var(--line);
+    padding-left: 24px;
+  }
+  .meta-strip > div:first-child { border-left: 0; padding-left: 0; }
+  .meta-strip .key {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--paper-mute);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .meta-strip .val {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: 18px;
+    color: var(--paper);
+  }
+  @media (max-width: 860px) {
+    .meta-strip { grid-template-columns: 1fr; }
+    .meta-strip > div { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); }
+    .meta-strip > div:first-child { border-top: 0; }
+  }
+
+  /* ─── compare table (resource vs action) ──────────────────────── */
+  .compare {
+    border: 1px solid var(--line);
+    border-radius: var(--rad);
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .compare-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 1fr;
+    border-top: 1px solid var(--line);
+  }
+  .compare-row:first-child { border-top: 0; }
+  .compare-row > div {
+    padding: 16px 22px;
+    font-size: 14px;
+  }
+  .compare-row .axis {
+    background: var(--ink-2);
+    color: var(--paper-mute);
+    font-family: var(--mono);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .compare-row .res { color: var(--paper-dim); border-left: 1px solid var(--line); }
+  .compare-row .act { color: var(--paper); border-left: 1px solid var(--line); background: rgba(111,184,201,0.04); }
+  .compare-row.head .axis { background: var(--ink); }
+  .compare-row.head .res { color: var(--paper-mute); font-family: var(--display); font-style: italic; font-size: 18px; }
+  .compare-row.head .act { color: var(--channel); font-family: var(--display); font-style: italic; font-size: 18px; }
+  @media (max-width: 720px) {
+    .compare-row { grid-template-columns: 1fr; }
+    .compare-row > div { border-left: 0 !important; border-top: 1px solid var(--line); }
+    .compare-row > div:first-child { border-top: 0; }
+  }
+
+  /* ─── inline labels ─────────────────────────────────────────────── */
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--paper-mute);
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+  .pill.ch { color: var(--channel); border-color: var(--channel-soft); }
+  .pill.id { color: var(--identity); border-color: var(--identity-soft); }
+  .pill.ac { color: var(--action); border-color: var(--action-soft); }
+  .pill.vi { color: var(--violation); border-color: var(--violation-soft); }
+
+  /* ─── feature list (used in differentiators) ────────────────── */
+  .feature-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
+  }
+  .feature-list li {
+    padding: 22px 24px;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .feature-list .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--channel);
+    letter-spacing: 0.12em;
+    display: block;
+    margin-bottom: 8px;
+  }
+  .feature-list .name {
+    font-family: var(--display);
+    font-weight: 500;
+    font-variation-settings: "opsz" 24;
+    font-size: 18px;
+    color: var(--paper);
+    margin-bottom: 6px;
+  }
+  .feature-list .body {
+    font-size: 14px;
+    color: var(--paper-dim);
+    line-height: 1.55;
+  }
+  @media (max-width: 720px) {
+    .feature-list { grid-template-columns: 1fr; }
+  }
+
+  /* ─── landscape table ──────────────────────────────────────────── */
+  .land {
+    width: 100%; border-collapse: collapse;
+    font-size: 14px;
+    border: 1px solid var(--line);
+  }
+  .land th, .land td {
+    text-align: left;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .land thead th {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--paper-mute);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    background: var(--ink-2);
+    font-weight: 500;
+  }
+  .land td.name {
+    font-family: var(--display);
+    color: var(--paper);
+    font-size: 16px;
+    font-weight: 500;
+  }
+  .land tr.us td { background: rgba(111, 184, 201, 0.06); }
+  .land tr.us td.name { color: var(--channel); }
+
+  /* ─── divider ──────────────────────────────────────────────────── */
+  .div-line {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--line) 12%, var(--line) 88%, transparent);
+    margin: 80px auto;
+    max-width: 1180px;
+  }
+
+  /* ─── progress dots (right side) ──────────────────────────────── */
+  .progress {
+    position: fixed;
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 40;
+  }
+  .progress a {
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 1px solid var(--line);
+    background: transparent;
+    display: block;
+    transition: all 0.2s ease;
+  }
+  .progress a.active {
+    background: var(--channel);
+    border-color: var(--channel);
+    box-shadow: 0 0 0 4px rgba(111, 184, 201, 0.18);
+  }
+  .progress a:hover { border-color: var(--channel); }
+  @media (max-width: 1100px) { .progress { display: none; } }
+
+  /* ─── svg fundamentals ─────────────────────────────────────────── */
+  svg .lab {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    fill: var(--paper-dim);
+    letter-spacing: 0.04em;
+  }
+  svg .lab-soft { fill: var(--paper-mute); }
+  svg .lab-em { fill: var(--paper); }
+  svg .lab-ch { fill: var(--channel); }
+  svg .lab-id { fill: var(--identity); }
+  svg .lab-ac { fill: var(--action); }
+  svg .ax { stroke: var(--line); stroke-width: 1; }
+  svg .ax-soft { stroke: var(--line-soft); stroke-width: 1; }
+  svg .node-ag { fill: var(--surface); stroke: var(--identity); stroke-width: 1.5; }
+  svg .node-hu { fill: var(--surface); stroke: var(--paper-dim); stroke-width: 1.5; stroke-dasharray: 3 3; }
+  svg .node-hub { fill: var(--ink-2); stroke: var(--channel); stroke-width: 1.5; }
+  svg .ch-line { stroke: var(--channel); stroke-width: 1.2; fill: none; }
+  svg .ch-line-soft { stroke: var(--channel-soft); stroke-width: 1; fill: none; }
+  svg .act-line { stroke: var(--action); stroke-width: 1.2; fill: none; }
+  svg .id-line { stroke: var(--identity); stroke-width: 1.2; fill: none; }
+  svg .vi-line { stroke: var(--violation); stroke-width: 1.2; fill: none; }
+  svg .panel { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  svg text { fill: var(--paper); font-family: var(--body); }
+  svg .title { font-family: var(--display); fill: var(--paper); font-size: 14px; font-weight: 500; }
+
+  /* pulse along channel lines */
+  @keyframes flow {
+    0% { stroke-dashoffset: 60; opacity: 0.2; }
+    50% { opacity: 1; }
+    100% { stroke-dashoffset: 0; opacity: 0.2; }
+  }
+  .flow {
+    stroke-dasharray: 4 8;
+    animation: flow 3s linear infinite;
+  }
+  .flow.slow { animation-duration: 5s; }
+  .flow.fast { animation-duration: 1.8s; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; r: 4; }
+    50% { opacity: 1; r: 6; }
+  }
+  .pulse-dot { animation: pulse 2.4s ease-in-out infinite; }
+
+  /* ─── footer ────────────────────────────────────────────────────── */
+  footer {
+    margin-top: 120px;
+    padding: 48px 28px 60px;
+    border-top: 1px solid var(--line);
+    text-align: center;
+    color: var(--paper-mute);
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  footer .line {
+    margin: 6px 0;
+  }
+  footer .brand-foot {
+    font-family: var(--display);
+    font-size: 22px;
+    color: var(--paper);
+    text-transform: none;
+    letter-spacing: -0.01em;
+    margin-bottom: 16px;
+  }
+  footer .brand-foot em { font-style: italic; color: var(--channel); }
+
+  /* numbered list */
+  ol.steps { counter-reset: stp; list-style: none; padding: 0; margin: 0; }
+  ol.steps li {
+    counter-increment: stp;
+    padding-left: 40px;
+    position: relative;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: var(--paper-dim);
+  }
+  ol.steps li::before {
+    content: counter(stp, decimal-leading-zero);
+    position: absolute; left: 0; top: 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--channel);
+    letter-spacing: 0.1em;
+  }
+
+  /* ─── note callout ──────────────────────────────────────────────── */
+  .note {
+    border-left: 2px solid var(--channel);
+    padding: 4px 0 4px 20px;
+    color: var(--paper-dim);
+    font-size: 14px;
+    margin: 24px 0;
+    max-width: 60ch;
+  }
+  .note em { color: var(--paper); font-style: normal; font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="#top">AG2&nbsp;Network<span class="dot">.</span></a>
+    <nav class="mini">
+      <a href="#shape">01 Shape</a>
+      <a href="#agents">02 Mismatch</a>
+      <a href="#define">03 Definition</a>
+      <a href="#stack">04 Stack</a>
+      <a href="#identity">05 Identity</a>
+      <a href="#channel">06 Channels</a>
+      <a href="#durability">07 Durability</a>
+      <a href="#choreography">08 Choreography</a>
+      <a href="#federation">09 Federation</a>
+      <a href="#demo1">10 Incident</a>
+      <a href="#demo2">11 Research</a>
+      <a href="#position">12 Position</a>
+    </nav>
+  </div>
+</header>
+
+<div class="progress" aria-hidden="true">
+  <a href="#top" data-target="top"></a>
+  <a href="#shape" data-target="shape"></a>
+  <a href="#agents" data-target="agents"></a>
+  <a href="#define" data-target="define"></a>
+  <a href="#stack" data-target="stack"></a>
+  <a href="#identity" data-target="identity"></a>
+  <a href="#channel" data-target="channel"></a>
+  <a href="#durability" data-target="durability"></a>
+  <a href="#choreography" data-target="choreography"></a>
+  <a href="#federation" data-target="federation"></a>
+  <a href="#demo1" data-target="demo1"></a>
+  <a href="#demo2" data-target="demo2"></a>
+  <a href="#position" data-target="position"></a>
+</div>
+
+<main>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- HERO                                                              -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="top" class="hero wide">
+  <div class="hero-tagline">AG2 / Network · A protocol-driven substrate for autonomous agents</div>
+  <h1 class="display">
+    An <em>action&#8209;driven</em><br/>
+    network for agents.
+  </h1>
+  <p class="hero-sub">
+    The internet is shaped for resources. Agents need a network shaped for actions:
+    stateful, identity&#8209;bound, durable, choreographed.
+  </p>
+  <div class="hero-byline">
+    <span>Durable channels</span>
+    <span>Signed identity</span>
+    <span>Choreography as data</span>
+    <span>Multi-hub federation</span>
+  </div>
+
+  <!-- ambient network topology -->
+  <svg class="hero-vis" viewBox="0 0 760 540" aria-hidden="true">
+    <defs>
+      <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#6FB8C9" stop-opacity="0.35" />
+        <stop offset="100%" stop-color="#6FB8C9" stop-opacity="0" />
+      </radialGradient>
+    </defs>
+    <!-- soft glow blobs -->
+    <circle cx="320" cy="240" r="220" fill="url(#glow)" />
+    <circle cx="560" cy="380" r="160" fill="url(#glow)" opacity="0.6" />
+
+    <!-- channels (curves) -->
+    <path class="ch-line flow" d="M 140 130 Q 320 60 510 170" />
+    <path class="ch-line flow slow" d="M 510 170 Q 600 270 580 380" />
+    <path class="ch-line flow" d="M 140 130 Q 230 280 280 410" />
+    <path class="ch-line flow slow" d="M 280 410 Q 430 430 580 380" />
+    <path class="id-line flow fast" d="M 510 170 Q 380 240 280 410" stroke-opacity="0.6" />
+    <path class="ch-line-soft" d="M 140 130 Q 380 240 580 380" stroke-opacity="0.3" />
+    <path class="act-line flow slow" d="M 660 110 Q 600 230 580 380" stroke-opacity="0.7" />
+
+    <!-- nodes -->
+    <g>
+      <circle class="node-ag" cx="140" cy="130" r="22" />
+      <text x="140" y="134" text-anchor="middle" class="lab lab-em">alice</text>
+      <text x="140" y="170" text-anchor="middle" class="lab lab-soft">agent</text>
+    </g>
+    <g>
+      <circle class="node-ag" cx="510" cy="170" r="22" />
+      <text x="510" y="174" text-anchor="middle" class="lab lab-em">bob</text>
+      <text x="510" y="210" text-anchor="middle" class="lab lab-soft">agent</text>
+    </g>
+    <g>
+      <circle class="node-hu" cx="280" cy="410" r="22" />
+      <text x="280" y="414" text-anchor="middle" class="lab lab-em">human</text>
+      <text x="280" y="450" text-anchor="middle" class="lab lab-soft">on-call</text>
+    </g>
+    <g>
+      <circle class="node-ag" cx="580" cy="380" r="22" />
+      <text x="580" y="384" text-anchor="middle" class="lab lab-em">carol</text>
+      <text x="580" y="420" text-anchor="middle" class="lab lab-soft">agent</text>
+    </g>
+    <g>
+      <circle class="node-hub" cx="660" cy="110" r="18" />
+      <text x="660" y="115" text-anchor="middle" class="lab lab-ch">hub</text>
+      <text x="660" y="148" text-anchor="middle" class="lab lab-soft">partner&nbsp;org</text>
+    </g>
+
+    <!-- pulses along curves -->
+    <circle class="pulse-dot" cx="330" cy="95" r="4" fill="#6FB8C9" />
+    <circle class="pulse-dot" cx="430" cy="430" r="4" fill="#A4C476" style="animation-delay: 0.6s" />
+    <circle class="pulse-dot" cx="600" cy="270" r="4" fill="#E0A36B" style="animation-delay: 1.2s" />
+  </svg>
+</section>
+
+<div class="div-line"></div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 01 Shape of the Internet                                          -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="shape">
+  <div class="marker">01 / The shape of the internet</div>
+  <div class="grid-2 wider">
+    <div>
+      <h2>The internet is shaped <em>for resources.</em></h2>
+      <p class="lead">HTTP, REST, MCP — every layer assumes the request is stateless, idempotent, replicable, addressable.</p>
+      <p>
+        This shape is right when the <em class="term">clients</em> hold the state. A human remembers what they
+        just sent and what to do with the reply. A browser caches. A workflow hardcodes the next transition.
+        The network can be stateless because the endpoints aren't.
+      </p>
+      <p>
+        Resources are the right primitive when the thing on the other end is a stateful brain or a
+        deterministic program. Forty years of network design followed from that assumption.
+      </p>
+    </div>
+    <div>
+      <svg viewBox="0 0 480 320" aria-hidden="true">
+        <!-- client -->
+        <rect class="panel" x="20" y="120" width="120" height="80" rx="4" />
+        <text x="80" y="158" text-anchor="middle" class="title">client</text>
+        <text x="80" y="178" text-anchor="middle" class="lab lab-soft">holds state</text>
+
+        <!-- server -->
+        <rect class="panel" x="340" y="120" width="120" height="80" rx="4" />
+        <text x="400" y="158" text-anchor="middle" class="title">server</text>
+        <text x="400" y="178" text-anchor="middle" class="lab lab-soft">resource</text>
+
+        <!-- request arrow -->
+        <path class="ch-line" d="M 140 145 L 335 145" />
+        <polygon points="335,140 345,145 335,150" fill="#6FB8C9" />
+        <text x="240" y="135" text-anchor="middle" class="lab lab-ch">GET /thing</text>
+
+        <!-- response arrow -->
+        <path class="ch-line" d="M 340 178 L 145 178" />
+        <polygon points="145,173 135,178 145,183" fill="#6FB8C9" />
+        <text x="240" y="200" text-anchor="middle" class="lab lab-ch">200 OK · {…}</text>
+
+        <!-- annotations -->
+        <text x="80" y="240" text-anchor="middle" class="lab lab-soft">remembers context,</text>
+        <text x="80" y="256" text-anchor="middle" class="lab lab-soft">decides next call</text>
+
+        <text x="400" y="240" text-anchor="middle" class="lab lab-soft">stateless, idempotent,</text>
+        <text x="400" y="256" text-anchor="middle" class="lab lab-soft">replicable</text>
+
+        <text x="240" y="296" text-anchor="middle" class="lab lab-em">resource shape</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 02 Why agents don't fit                                           -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="agents">
+  <div class="marker">02 / The mismatch</div>
+  <h2>Agents break the assumption.</h2>
+  <p class="lead">An LLM is stateless. Its output is stochastic. Neither end of a conversation behaves like the client or the server the protocols were drawn for.</p>
+
+  <div class="grid-2" style="margin-top: 40px;">
+    <div>
+      <h4>What an agent <em>actually</em> is</h4>
+      <p>
+        Every memory is re-injected as context — there is no persistent "brain" between turns. Generation is a
+        probability distribution, not a function. Identity exists only as long as someone hands you the right
+        prompt prefix. Side effects (a sent message, a file written, a payment authorised) are real even when
+        the next call doesn't know they happened.
+      </p>
+      <h4 style="margin-top: 32px;">What today's frameworks do about it</h4>
+      <p>
+        They become single&#8209;process orchestrators. LangGraph holds the state in a graph snapshot. CrewAI
+        holds it in a Crew. AutoGen holds it in an actor runtime. The orchestrator <em class="term">is</em>
+        the missing brain — the agents themselves stay stateless, and the network underneath is still a
+        request/response wire.
+      </p>
+      <h4 style="margin-top: 32px;">What that costs</h4>
+      <p>
+        The moment two agents need to live in different processes, on different machines, in different
+        organisations, on different schedules — the orchestrator's grip slips. State that used to live in one
+        Python object now has nowhere to live. The wire format (A2A, MCP) is still resource&#8209;shaped.
+        Distributed multi&#8209;agent reduces to "more REST calls."
+      </p>
+    </div>
+    <div>
+      <svg viewBox="0 0 480 380" aria-hidden="true">
+        <!-- LLM box -->
+        <rect class="panel" x="90" y="30" width="300" height="70" rx="4" />
+        <text x="240" y="62" text-anchor="middle" class="title">LLM</text>
+        <text x="240" y="82" text-anchor="middle" class="lab lab-soft">stateless · stochastic</text>
+
+        <!-- context arrow in -->
+        <path class="id-line" d="M 30 65 L 85 65" />
+        <polygon points="85,60 95,65 85,70" fill="#E0A36B" />
+        <text x="58" y="50" text-anchor="middle" class="lab lab-id">context</text>
+
+        <!-- response arrow out -->
+        <path class="ch-line" d="M 395 65 L 450 65" />
+        <polygon points="450,60 460,65 450,70" fill="#6FB8C9" />
+        <text x="423" y="50" text-anchor="middle" class="lab lab-ch">tokens</text>
+
+        <!-- gap label -->
+        <text x="240" y="150" text-anchor="middle" class="lab lab-soft">— nothing persists between calls —</text>
+
+        <!-- orchestrator -->
+        <rect class="panel" x="60" y="180" width="360" height="140" rx="4" />
+        <text x="240" y="210" text-anchor="middle" class="title">orchestrator (in&#8209;process)</text>
+        <text x="240" y="230" text-anchor="middle" class="lab lab-soft">holds the state the agents can't</text>
+
+        <!-- state pills inside orch -->
+        <rect x="90" y="248" width="100" height="22" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="140" y="263" text-anchor="middle" class="lab lab-id">conversation</text>
+        <rect x="200" y="248" width="80" height="22" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="240" y="263" text-anchor="middle" class="lab lab-id">handoffs</text>
+        <rect x="290" y="248" width="100" height="22" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="340" y="263" text-anchor="middle" class="lab lab-id">tool history</text>
+
+        <rect x="90" y="280" width="120" height="22" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="150" y="295" text-anchor="middle" class="lab lab-id">graph snapshot</text>
+        <rect x="220" y="280" width="100" height="22" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="270" y="295" text-anchor="middle" class="lab lab-id">memory</text>
+        <rect x="330" y="280" width="60" height="22" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="360" y="295" text-anchor="middle" class="lab lab-id">scratch</text>
+
+        <!-- caption -->
+        <text x="240" y="355" text-anchor="middle" class="lab lab-em">the orchestrator is the brain that the agent isn't</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="meta-strip">
+    <div>
+      <div class="key">Agent property</div>
+      <div class="val">Stateless · stochastic · side&#8209;effecting</div>
+    </div>
+    <div>
+      <div class="key">Today's workaround</div>
+      <div class="val">Single&#8209;process orchestrator holds it together</div>
+    </div>
+    <div>
+      <div class="key">What breaks</div>
+      <div class="val">Cross&#8209;process, cross&#8209;machine, cross&#8209;org</div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 03 Definition                                                     -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="define">
+  <div class="marker">03 / The definition</div>
+  <h2>Action&#8209;driven networking is the missing layer.</h2>
+  <p class="lead">A network where the <em>channel between agents</em> is the unit of abstraction — not the request, not the orchestrator, not the team.</p>
+
+  <p>
+    The internet's resource layer keeps doing its job: agents fetch documents, call MCP tools, hit REST endpoints.
+    Action&#8209;driven networking is what sits next to that — the substrate for interactions that are stateful
+    by nature, that imply identity, that carry consequences. The channel <em class="term">is</em> the durable
+    contract: it carries history, participants, the protocol they're following, and the liveness expectations
+    that hold them to it.
+  </p>
+
+  <div class="compare">
+    <div class="compare-row head">
+      <div class="axis">Axis</div>
+      <div class="res">Resource&#8209;driven (HTTP, MCP, A2A wire)</div>
+      <div class="act">Action&#8209;driven (AG2 Network)</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">Unit</div>
+      <div class="res">Request &amp; response</div>
+      <div class="act">Durable channel</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">State</div>
+      <div class="res">Stateless — caller holds it</div>
+      <div class="act">Stateful — channel WAL holds it</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">Idempotency</div>
+      <div class="res">Required by contract</div>
+      <div class="act">Not assumed; replies de&#8209;duped by causation</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">Identity</div>
+      <div class="res">Per&#8209;call (token, key)</div>
+      <div class="act">Per&#8209;participant (signed passport + observed resume)</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">Coordination</div>
+      <div class="res">Caller orchestrates externally</div>
+      <div class="act">Adapter choreographs from folded state</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">Failure model</div>
+      <div class="res">Retry &amp; backoff</div>
+      <div class="act">Liveness expectations + passive handlers</div>
+    </div>
+    <div class="compare-row">
+      <div class="axis">Topology</div>
+      <div class="res">Star to endpoint</div>
+      <div class="act">Mesh of hubs, federated</div>
+    </div>
+  </div>
+
+  <p style="margin-top: 36px;">
+    Plainly: <strong>MCP is HTTP for tools. A2A is HTTP for agents. AG2 Network is TCP for actions.</strong>
+    The layer where stateful, identity&#8209;bound, choreographed interaction lives — independent of which
+    framework wrote the agent above it or which provider serves its tokens.
+  </p>
+</section>
+
+<div class="div-line"></div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 04 Stack                                                          -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="stack" class="wide">
+  <div class="marker">04 / The stack</div>
+  <h2>Seven <em>layers</em>, each independently replaceable.</h2>
+  <p class="lead">Every layer is a Protocol, not a class. Swap a transport, plug a new adapter, register a new view — the rest of the stack doesn't notice.</p>
+
+  <div class="grid-2 narrower">
+    <div>
+      <p>
+        The framework was drawn as a stack so that each concern has one home and one substitutable shape.
+        Transport doesn't know about workflows. Workflows don't know about transports. Identity doesn't know
+        about tools. Tools don't know about identity. That separation is what makes the same code run
+        in&#8209;process for a unit test, across processes for a deployment, and across organisations for
+        federation — without rewriting the layer above or below.
+      </p>
+      <p>
+        The hub is in <em class="term-c">L2</em>. It is a <em class="term">router</em>, not an orchestrator.
+        It never calls <code>Agent.ask</code>, never executes tenant code, never makes the next&#8209;turn
+        decision. Choreography lives in <em class="term-c">L3</em>, computed by a stateless adapter from
+        WAL&#8209;folded state. The trust boundary runs through <em class="term-c">L6</em>.
+      </p>
+    </div>
+
+    <div>
+      <svg viewBox="0 0 520 540" aria-hidden="true">
+        <!-- Layer rows -->
+        <g font-family="Inter">
+          <!-- L7 -->
+          <rect x="20" y="20" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="44" class="lab lab-soft">L7</text>
+          <text x="80" y="44" class="title">Verb surface</text>
+          <text x="80" y="62" class="lab lab-soft">NetworkPlugin · adapter&#8209;owned LLM tools</text>
+
+          <!-- L6 -->
+          <rect x="20" y="84" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="108" class="lab lab-soft">L6</text>
+          <text x="80" y="108" class="title">Bridge</text>
+          <text x="80" y="126" class="lab lab-soft">NetworkClient — agent, human, remote</text>
+
+          <!-- L5 -->
+          <rect x="20" y="148" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="172" class="lab lab-soft">L5</text>
+          <text x="80" y="172" class="title">Identity &amp; trust</text>
+          <text x="80" y="190" class="lab lab-soft">Passport · Resume · SKILL.md · Auth</text>
+
+          <!-- L4 -->
+          <rect x="20" y="212" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="236" class="lab lab-soft">L4</text>
+          <text x="80" y="236" class="title">Context</text>
+          <text x="80" y="254" class="lab lab-soft">ViewPolicy · per&#8209;participant projection</text>
+
+          <!-- L3 -->
+          <rect x="20" y="276" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="300" class="lab lab-soft">L3</text>
+          <text x="80" y="300" class="title">Choreography</text>
+          <text x="80" y="318" class="lab lab-soft">Adapter (stateless · pure fold of WAL)</text>
+
+          <!-- L2 -->
+          <rect x="20" y="340" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="364" class="lab lab-soft">L2</text>
+          <text x="80" y="364" class="title">Routing</text>
+          <text x="80" y="382" class="lab lab-soft">Hub · WAL · dispatch · arbiter</text>
+
+          <!-- L1 -->
+          <rect x="20" y="404" width="480" height="56" rx="4" class="panel" />
+          <text x="42" y="428" class="lab lab-soft">L1</text>
+          <text x="80" y="428" class="title">Transport</text>
+          <text x="80" y="446" class="lab lab-soft">Link · LocalLink · WsLink · frames</text>
+
+          <!-- side rail -->
+          <line x1="10" y1="20" x2="10" y2="460" class="ax" />
+          <text x="0" y="20" class="lab lab-ch" transform="rotate(-90 0 20)" style="text-anchor: end">user&#8209;facing</text>
+          <text x="0" y="460" class="lab lab-id" transform="rotate(-90 0 460)" style="text-anchor: start">wire&#8209;level</text>
+
+          <!-- bottom caption -->
+          <text x="260" y="500" text-anchor="middle" class="lab lab-em">every layer is a Protocol — swap any one without touching the others</text>
+          <text x="260" y="520" text-anchor="middle" class="lab lab-soft">trust boundary at L6 · choreography at L3 · routing at L2</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 05 Identity                                                       -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="identity">
+  <div class="marker">05 / Identity</div>
+  <h2>Identity is <span class="accent-i">three records</span>, not a name.</h2>
+  <p class="lead">A bare agent is anonymous. Joining the network stamps a permanent identifier, attaches a track record, and publishes a usage doc the calling LLM can read.</p>
+
+  <div class="grid-3" style="margin-top: 32px;">
+    <div class="card identity">
+      <div class="badge">Passport</div>
+      <h3>Immutable identity</h3>
+      <p style="margin-bottom: 18px;">Hub&#8209;stamped UUID7 at registration. Carries name, owner, provider, model, cost profile, region, signed <code>AuthBlock</code>. Re&#8209;registering produces a new identity.</p>
+      <div class="pill id">read by</div> <span class="small">hub, billing, auth, routing</span><br/>
+      <div class="pill id" style="margin-top:6px;">mutation</div> <span class="small">never (for the life of the registration)</span>
+    </div>
+    <div class="card identity">
+      <div class="badge">Resume</div>
+      <h3>Mutable track record</h3>
+      <p style="margin-bottom: 18px;">Self&#8209;claimed capabilities, domains, summary, examples. Plus hub&#8209;observed counters: completed, failed, p50 latency. Discovery ranks by <em class="term">observed</em>, not just declared.</p>
+      <div class="pill id">read by</div> <span class="small">discovery, planning LLMs, peers</span><br/>
+      <div class="pill id" style="margin-top:6px;">mutation</div> <span class="small">tenant set + hub observation</span>
+    </div>
+    <div class="card identity">
+      <div class="badge">SKILL.md</div>
+      <h3>LLM&#8209;facing doc</h3>
+      <p style="margin-bottom: 18px;">Anthropic&#8209;format Markdown with frontmatter. Lists when to call this agent, inputs expected, examples. The same format 30+ tools already read — the discovering LLM uses it like any other skill.</p>
+      <div class="pill id">read by</div> <span class="small">peer LLMs deciding who to call</span><br/>
+      <div class="pill id" style="margin-top:6px;">mutation</div> <span class="small">author rewrites the file</span>
+    </div>
+  </div>
+
+  <div class="grid-2 wider" style="margin-top: 48px;">
+    <div>
+      <h3 style="font-size: 28px; margin-bottom: 16px;">Why split into three.</h3>
+      <p>
+        Three different readers, three different mutation rates, three different trust models. Conflating them
+        — the way <code>agent.name = "Engineer"</code> does in every classic framework — means you cannot
+        distinguish <em class="term">who</em> the agent is (passport) from <em class="term">how it has
+        performed</em> (resume) from <em class="term">how to call it</em> (skill).
+      </p>
+      <p>
+        Discovery becomes <em>capability&#8209;ranked by observed outcomes</em>, not name&#8209;based or
+        author&#8209;asserted. Federation becomes possible: a signed passport from another hub is
+        cryptographically the same kind of thing as one from yours.
+      </p>
+    </div>
+<pre><span class="com"># A passport, after registration</span>
+<span class="cls">Passport</span>(
+  agent_id=<span class="str">"01HQ8KZ7V3..."</span>,  <span class="com"># UUID7, hub-stamped</span>
+  name=<span class="str">"diagnostician"</span>,
+  owner=<span class="str">"acme-platform"</span>,
+  provider=<span class="str">"anthropic"</span>,
+  model=<span class="str">"claude-sonnet-4-6"</span>,
+  cost=<span class="cls">CostProfile</span>(input_per_mtok=<span class="num">3.0</span>),
+  auth=<span class="cls">AuthBlock</span>(scheme=<span class="str">"api_key"</span>, …),
+  kind=<span class="str">"agent"</span>,
+)
+
+<span class="com"># Resume — observed in production</span>
+<span class="cls">Resume</span>(
+  claimed_capabilities=[<span class="str">"incident-triage"</span>, <span class="str">"db-diagnostics"</span>],
+  observed={
+    <span class="str">"incident-triage"</span>: <span class="cls">ObservedStat</span>(
+      n=<span class="num">847</span>, completed=<span class="num">821</span>, failed=<span class="num">19</span>,
+      p50_latency_ms=<span class="num">4200</span>,
+    ),
+  },
+)</pre>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 06 Channels                                                       -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="channel" class="wide">
+  <div class="marker">06 / Channels</div>
+  <h2>The channel <em>is</em> the action.</h2>
+  <p class="lead">A durable, identity&#8209;scoped, protocol&#8209;typed container with an append&#8209;only WAL. Open it, work inside it, close it — the channel is what survives.</p>
+
+  <div class="grid-2 wider" style="margin-top: 36px;">
+    <div>
+      <h4>Manifest (data) + Adapter (code)</h4>
+      <p>
+        A <code>ChannelManifest</code> is the persisted description of what the channel is — type, version,
+        participant schema, view policy, declared expectations. A <code>ChannelAdapter</code> is the code
+        that defines its choreography: stateless, pure, registered by <code>(type, version)</code>.
+      </p>
+      <h4 style="margin-top: 24px;">State by folding, not by storing</h4>
+      <p>
+        The hub holds no choreography state of its own. <code>AdapterState</code> is
+        <code>fold(env_n, fold(env_{n−1}, ... initial))</code> — a deterministic projection of the WAL.
+        <code>validate_send</code> and <code>on_accepted</code> are O(1). Restart and re&#8209;fold from disk
+        and you are back where you were, exactly.
+      </p>
+      <h4 style="margin-top: 24px;">Audience addressing</h4>
+      <p>
+        Every envelope carries an <code>audience</code>: a subset of participants who actually see it,
+        or <code>None</code> for broadcast. The WAL records all; the projection per participant filters
+        by visibility. Private side&#8209;channels and group context live on the same primitive.
+      </p>
+    </div>
+    <div>
+      <!-- Channel state machine -->
+      <svg viewBox="0 0 540 360" aria-hidden="true">
+        <!-- states -->
+        <g>
+          <rect x="20" y="60" width="100" height="44" rx="22" class="panel" />
+          <text x="70" y="86" text-anchor="middle" class="title">PENDING</text>
+          <text x="70" y="120" text-anchor="middle" class="lab lab-soft">invite sent</text>
+
+          <rect x="170" y="60" width="100" height="44" rx="22" class="panel" stroke="#A4C476" />
+          <text x="220" y="86" text-anchor="middle" class="title">ACTIVE</text>
+          <text x="220" y="120" text-anchor="middle" class="lab lab-soft">running</text>
+
+          <rect x="320" y="60" width="100" height="44" rx="22" class="panel" />
+          <text x="370" y="86" text-anchor="middle" class="title">CLOSING</text>
+          <text x="370" y="120" text-anchor="middle" class="lab lab-soft">quiescent</text>
+
+          <rect x="170" y="200" width="100" height="44" rx="22" class="panel" />
+          <text x="220" y="226" text-anchor="middle" class="title">CLOSED</text>
+
+          <rect x="320" y="200" width="100" height="44" rx="22" class="panel" stroke="#D67A6B" />
+          <text x="370" y="226" text-anchor="middle" class="title">EXPIRED</text>
+        </g>
+        <!-- arrows -->
+        <path class="ch-line" d="M 120 82 L 165 82" />
+        <polygon points="165,77 175,82 165,87" fill="#6FB8C9" />
+        <path class="ch-line" d="M 270 82 L 315 82" />
+        <polygon points="315,77 325,82 315,87" fill="#6FB8C9" />
+        <path class="ch-line" d="M 250 104 Q 240 160 230 195" />
+        <polygon points="226,190 230,200 234,190" fill="#6FB8C9" />
+        <path class="vi-line" d="M 70 104 Q 100 170 175 220" stroke-dasharray="4 4" />
+        <polygon points="172,215 182,220 175,225" fill="#D67A6B" />
+        <path class="vi-line" d="M 370 104 L 370 195" />
+        <polygon points="366,195 370,205 374,195" fill="#D67A6B" />
+
+        <!-- labels on arrows -->
+        <text x="142" y="74" class="lab lab-ac" text-anchor="middle">acks ✓</text>
+        <text x="292" y="74" class="lab lab-soft" text-anchor="middle">on_accepted</text>
+        <text x="285" y="156" class="lab lab-soft" text-anchor="middle">close()</text>
+        <text x="115" y="155" class="lab" fill="#D67A6B" text-anchor="middle">acks &#8709;</text>
+        <text x="395" y="155" class="lab" fill="#D67A6B" text-anchor="middle">TTL</text>
+
+        <!-- caption -->
+        <rect x="20" y="290" width="500" height="58" rx="4" fill="#131C28" stroke="#2A3441" />
+        <text x="270" y="312" text-anchor="middle" class="lab lab-em">state = fold(envelope, prior state)</text>
+        <text x="270" y="330" text-anchor="middle" class="lab lab-soft">deterministic · O(1) per envelope · rebuilt by re&#8209;folding the WAL</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Adapter types -->
+  <div style="margin-top: 56px;">
+    <h3 style="font-size: 26px; margin-bottom: 18px;">Four built&#8209;in choreographies on the same primitive.</h3>
+    <div class="grid-3">
+      <div class="card channel">
+        <div class="badge">consulting</div>
+        <h3>1 ↔ 1, one round</h3>
+        <p>Strict Q+R. Initiator asks, respondent answers, the channel auto&#8209;closes. The simplest delegation primitive.</p>
+        <svg viewBox="0 0 280 90" aria-hidden="true" style="margin-top: 14px;">
+          <circle class="node-ag" cx="40" cy="45" r="16" />
+          <circle class="node-ag" cx="240" cy="45" r="16" />
+          <text x="40" y="80" class="lab" text-anchor="middle">A</text>
+          <text x="240" y="80" class="lab" text-anchor="middle">B</text>
+          <path class="ch-line" d="M 56 38 L 224 38" /><polygon points="224,33 234,38 224,43" fill="#6FB8C9" />
+          <path class="ch-line" d="M 224 52 L 56 52" /><polygon points="56,47 46,52 56,57" fill="#6FB8C9" />
+        </svg>
+      </div>
+      <div class="card channel">
+        <div class="badge">conversation</div>
+        <h3>1 ↔ 1, multi-turn</h3>
+        <p>Bidirectional, long&#8209;running. Either side may speak. Closes on explicit close or TTL. Default view bounds the prompt by windowing.</p>
+        <svg viewBox="0 0 280 90" aria-hidden="true" style="margin-top: 14px;">
+          <circle class="node-ag" cx="40" cy="45" r="16" />
+          <circle class="node-ag" cx="240" cy="45" r="16" />
+          <text x="40" y="80" class="lab" text-anchor="middle">A</text>
+          <text x="240" y="80" class="lab" text-anchor="middle">B</text>
+          <path class="ch-line flow" d="M 56 36 L 224 36" />
+          <path class="ch-line flow slow" d="M 224 54 L 56 54" />
+          <path class="ch-line flow fast" d="M 56 42 L 224 42" stroke-opacity="0.5" />
+          <path class="ch-line flow" d="M 224 48 L 56 48" stroke-opacity="0.5" />
+        </svg>
+      </div>
+      <div class="card channel">
+        <div class="badge">discussion</div>
+        <h3>N&#8209;party turn&#8209;taking</h3>
+        <p>Round&#8209;robin, dynamic, or static ordering. Multi&#8209;party N&#8209;of&#8209;M quorum on the invite handshake. Per&#8209;participant windowed views keep prompts bounded.</p>
+        <svg viewBox="0 0 280 110" aria-hidden="true" style="margin-top: 8px;">
+          <circle class="node-ag" cx="140" cy="20" r="12" />
+          <circle class="node-ag" cx="240" cy="55" r="12" />
+          <circle class="node-ag" cx="200" cy="95" r="12" />
+          <circle class="node-ag" cx="80" cy="95" r="12" />
+          <circle class="node-ag" cx="40" cy="55" r="12" />
+          <path class="ch-line" d="M 152 24 Q 200 30 232 49" />
+          <path class="ch-line" d="M 240 67 Q 230 90 207 92" />
+          <path class="ch-line" d="M 192 95 Q 140 110 90 95" />
+          <path class="ch-line" d="M 75 89 Q 50 80 45 65" />
+          <path class="ch-line" d="M 47 47 Q 90 25 130 22" />
+        </svg>
+      </div>
+      <div class="card channel">
+        <div class="badge">workflow</div>
+        <h3>Orchestrated by a graph</h3>
+        <p>Speaker advances per a declarative <code>TransitionGraph</code> over folded state. Replaces the classic GroupChat + Handoffs + AfterWork triad with a single channel kind.</p>
+        <svg viewBox="0 0 280 110" aria-hidden="true" style="margin-top: 8px;">
+          <circle class="node-ag" cx="40" cy="55" r="12" />
+          <circle class="node-ag" cx="140" cy="25" r="12" />
+          <circle class="node-ag" cx="140" cy="85" r="12" />
+          <circle class="node-ag" cx="240" cy="55" r="12" />
+          <path class="ch-line" d="M 52 50 L 128 30" /><polygon points="125,26 132,29 128,33" fill="#6FB8C9"/>
+          <path class="ch-line" d="M 52 60 L 128 80" /><polygon points="125,84 132,81 128,77" fill="#6FB8C9"/>
+          <path class="ch-line" d="M 152 30 L 228 50" /><polygon points="225,46 232,49 228,53" fill="#6FB8C9"/>
+          <path class="ch-line" d="M 152 80 L 228 60" /><polygon points="225,64 232,61 228,57" fill="#6FB8C9"/>
+          <text x="90" y="20" class="lab lab-soft">ToolCalled</text>
+          <text x="90" y="105" class="lab lab-soft">FromSpeaker</text>
+        </svg>
+      </div>
+      <div class="card channel">
+        <div class="badge">+ extensible</div>
+        <h3>Bring your own choreography</h3>
+        <p>The Adapter Protocol is open. Tournament, auction, broadcast, notification — any choreography fits if it can be written as a pure fold + validate + on_accepted triple.</p>
+        <svg viewBox="0 0 280 90" aria-hidden="true" style="margin-top: 14px;">
+          <rect x="60" y="30" width="160" height="30" rx="4" class="panel" stroke-dasharray="3 3" />
+          <text x="140" y="50" text-anchor="middle" class="lab lab-soft">ChannelAdapter Protocol</text>
+        </svg>
+      </div>
+      <div class="card">
+        <div class="badge" style="color: var(--paper-mute);">invariant</div>
+        <h3>WAL is the truth.</h3>
+        <p>Every channel has an append&#8209;only WAL. Hub crashes? Replay. Process moves machines? Replay. New observer joins mid&#8209;flow? Project from the WAL. The channel is the contract; the WAL is its memory.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 07 Durability                                                     -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="durability">
+  <div class="marker">07 / Durability</div>
+  <h2>What survives, <em>survives exactly.</em></h2>
+  <p class="lead">Every channel writes an append&#8209;only log. Every adapter state is a pure fold of that log. Crash the hub, re&#8209;fold from disk, and the channel is exactly where it was — to the envelope.</p>
+
+  <div class="grid-2 wider" style="margin-top: 36px;">
+    <div>
+      <h4>The substrate, not a feature</h4>
+      <p>
+        Frameworks that came before treat durability as an opt&#8209;in extension. LangGraph attaches a
+        checkpointer; the Durable Workflow extension bolts onto AutoGen. Both exist because the default
+        in&#8209;memory orchestrator state is famously fragile in production. AG2 Network inverts the
+        default — durability <em class="term">is</em> the substrate.
+      </p>
+      <h4 style="margin-top: 28px;">"Exactly" means exactly</h4>
+      <p>
+        Adapter state is <code>fold(env<sub>n</sub>, … fold(env<sub>1</sub>, initial))</code> — a pure
+        function. Same WAL on disk, same state in memory, every time. No migration step, no
+        replay&#8209;the&#8209;replay loop, no "best effort." A hub restart is a non&#8209;event for the
+        channels it hosts; the in&#8209;flight workflow picks up at the next envelope.
+      </p>
+      <h4 style="margin-top: 28px;">Even orchestration is data</h4>
+      <p>
+        Workflow graphs are JSON snapshotted into the channel manifest. Targets and conditions resolve
+        through a named registry. No Python travels the wire; <code>TransitionGraph.dumps()</code> on one
+        side and <code>loads()</code> on the other yields the same graph, same fold, same outcome.
+        Migration from imperative orchestrators is mechanical — <code>from_classic_pattern</code>
+        translates classic AG2 patterns directly into the same data shape.
+      </p>
+      <h4 style="margin-top: 28px;">Tasks have their own durable spine</h4>
+      <p>
+        A task is an agent&#8209;owned event stream — <code>TaskStarted</code>, <code>TaskProgress</code>,
+        terminal — appended as it happens. Opt into <code>Task.checkpoint(state)</code> and the work
+        itself becomes resumable from the last checkpoint, on the same machine or a different one.
+      </p>
+    </div>
+
+    <div>
+      <!-- durable vs volatile architecture -->
+      <svg viewBox="0 0 540 460" aria-hidden="true">
+        <!-- horizontal divider -->
+        <line x1="20" y1="230" x2="520" y2="230" stroke="#E0A36B" stroke-dasharray="6 6" />
+        <text x="510" y="222" text-anchor="end" class="lab lab-id">volatile · process memory</text>
+        <text x="510" y="248" text-anchor="end" class="lab lab-id">durable · written to store</text>
+
+        <!-- above the line: volatile -->
+        <rect class="panel" x="40" y="60" width="220" height="60" rx="4" />
+        <text x="150" y="84" text-anchor="middle" class="title">AdapterState</text>
+        <text x="150" y="102" text-anchor="middle" class="lab lab-soft">folded projection · O(1)</text>
+
+        <rect class="panel" x="280" y="60" width="220" height="60" rx="4" />
+        <text x="390" y="84" text-anchor="middle" class="title">connections</text>
+        <text x="390" y="102" text-anchor="middle" class="lab lab-soft">endpoints · LLM clients</text>
+
+        <rect class="panel" x="160" y="140" width="220" height="60" rx="4" />
+        <text x="270" y="164" text-anchor="middle" class="title">indexes · caches</text>
+        <text x="270" y="182" text-anchor="middle" class="lab lab-soft">rebuilt from disk on hydrate</text>
+
+        <!-- below the line: durable -->
+        <rect class="panel" x="40" y="270" width="220" height="60" rx="4" stroke="#A4C476" />
+        <text x="150" y="294" text-anchor="middle" class="title">channel WAL</text>
+        <text x="150" y="312" text-anchor="middle" class="lab lab-soft">append&#8209;only · per&#8209;channel</text>
+
+        <rect class="panel" x="280" y="270" width="220" height="60" rx="4" stroke="#A4C476" />
+        <text x="390" y="294" text-anchor="middle" class="title">manifest + graph</text>
+        <text x="390" y="312" text-anchor="middle" class="lab lab-soft">JSON · adapter dispatch</text>
+
+        <rect class="panel" x="40" y="350" width="220" height="60" rx="4" stroke="#A4C476" />
+        <text x="150" y="374" text-anchor="middle" class="title">passports · resumes</text>
+        <text x="150" y="392" text-anchor="middle" class="lab lab-soft">identity · observed stats</text>
+
+        <rect class="panel" x="280" y="350" width="220" height="60" rx="4" stroke="#A4C476" />
+        <text x="390" y="374" text-anchor="middle" class="title">task events + checkpoint</text>
+        <text x="390" y="392" text-anchor="middle" class="lab lab-soft">opt&#8209;in restart recovery</text>
+
+        <!-- fold arrows: durable → volatile -->
+        <path d="M 150 270 Q 60 230 70 120" stroke="#6FB8C9" stroke-dasharray="3 4" fill="none" />
+        <polygon points="66,124 72,116 76,124" fill="#6FB8C9" />
+        <text x="20" y="200" class="lab lab-ch">re&#8209;fold</text>
+        <text x="20" y="214" class="lab lab-soft">on hydrate</text>
+
+        <path d="M 390 270 Q 470 230 460 200" stroke="#E0A36B" stroke-dasharray="3 4" fill="none" />
+        <polygon points="456,204 462,196 466,204" fill="#E0A36B" />
+        <text x="464" y="200" class="lab lab-id">resolve</text>
+
+        <!-- caption -->
+        <text x="270" y="442" text-anchor="middle" class="lab lab-em">volatile = pure_fold(durable) · the store is authoritative</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- restart timeline -->
+  <div style="margin-top: 64px;">
+    <h3 style="font-size: 26px; margin-bottom: 18px;">A hub restart, end to end.</h3>
+    <svg viewBox="0 0 1180 300" aria-hidden="true">
+      <!-- time axis -->
+      <line x1="40" y1="60" x2="1140" y2="60" class="ax" />
+      <text x="40" y="40" class="lab lab-soft">t</text>
+      <text x="350" y="40" text-anchor="middle" class="lab" fill="#D67A6B">— crash —</text>
+      <text x="610" y="40" text-anchor="middle" class="lab" fill="#A4C476">— restart —</text>
+      <text x="900" y="40" text-anchor="middle" class="lab lab-ch">— resume —</text>
+
+      <!-- markers -->
+      <line x1="350" y1="50" x2="350" y2="250" stroke="#D67A6B" stroke-dasharray="3 3" />
+      <line x1="610" y1="50" x2="610" y2="250" stroke="#A4C476" stroke-dasharray="3 3" />
+
+      <!-- row labels -->
+      <text x="34" y="100" text-anchor="end" class="lab lab-em">hub process</text>
+      <text x="34" y="160" text-anchor="end" class="lab lab-em">channel WAL</text>
+      <text x="34" y="220" text-anchor="end" class="lab lab-em">adapter state</text>
+
+      <!-- hub row -->
+      <rect x="60" y="80" width="290" height="40" rx="4" fill="#1A2330" stroke="#5F7745" />
+      <text x="205" y="105" class="lab lab-ac" text-anchor="middle">running · accepting envelopes</text>
+      <rect x="610" y="80" width="530" height="40" rx="4" fill="#1A2330" stroke="#5F7745" />
+      <text x="875" y="105" class="lab lab-ac" text-anchor="middle">running · channel continues</text>
+      <text x="480" y="105" class="lab" fill="#D67A6B" text-anchor="middle">— dead —</text>
+
+      <!-- WAL row -->
+      <rect x="60" y="140" width="1080" height="40" rx="4" fill="#1A2330" stroke="#5F7745" />
+      <text x="600" y="165" class="lab lab-ac" text-anchor="middle">on disk · untouched · authoritative</text>
+      <g fill="#A4C476">
+        <rect x="80" y="148" width="3" height="24" />
+        <rect x="130" y="148" width="3" height="24" />
+        <rect x="180" y="148" width="3" height="24" />
+        <rect x="230" y="148" width="3" height="24" />
+        <rect x="280" y="148" width="3" height="24" />
+        <rect x="320" y="148" width="3" height="24" />
+        <rect x="650" y="148" width="3" height="24" />
+        <rect x="700" y="148" width="3" height="24" />
+        <rect x="760" y="148" width="3" height="24" />
+        <rect x="820" y="148" width="3" height="24" />
+        <rect x="880" y="148" width="3" height="24" />
+        <rect x="950" y="148" width="3" height="24" />
+        <rect x="1010" y="148" width="3" height="24" />
+        <rect x="1080" y="148" width="3" height="24" />
+      </g>
+
+      <!-- adapter state row -->
+      <rect x="60" y="200" width="290" height="40" rx="4" fill="#1A2330" stroke="#3D7585" />
+      <text x="205" y="225" class="lab lab-ch" text-anchor="middle">folded forward · O(1)</text>
+      <text x="480" y="225" class="lab" fill="#D67A6B" text-anchor="middle">— gone —</text>
+      <rect x="610" y="200" width="110" height="40" rx="4" fill="#1A2330" stroke="#E0A36B" />
+      <text x="665" y="225" class="lab lab-id" text-anchor="middle">re&#8209;fold</text>
+      <rect x="730" y="200" width="410" height="40" rx="4" fill="#1A2330" stroke="#3D7585" />
+      <text x="935" y="225" class="lab lab-ch" text-anchor="middle">identical state, byte&#8209;for&#8209;byte</text>
+
+      <!-- caption -->
+      <text x="590" y="278" text-anchor="middle" class="lab lab-em">the channel does not know the hub died · agents reconnect and pending turns fire</text>
+    </svg>
+  </div>
+
+  <div class="meta-strip">
+    <div>
+      <div class="key">Channel WAL</div>
+      <div class="val">Append&#8209;only · per&#8209;channel · the source of truth</div>
+    </div>
+    <div>
+      <div class="key">Adapter state</div>
+      <div class="val">Pure fold of WAL · O(1) per envelope · always rebuildable</div>
+    </div>
+    <div>
+      <div class="key">Reconnect</div>
+      <div class="val">Inbox cursor replays unacked · causation index dedups replies</div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top: 36px;">
+    <em>Why this matters in deployment.</em> Channels run for hours. Processes restart, machines reboot,
+    networks partition, humans go off shift, deploys ship mid&#8209;flight. Without durability as
+    substrate every one of those events ends the channel. With it, the channel is the artifact that
+    outlasts everything beneath it — visible to ops, replayable for debugging, auditable for compliance,
+    available to any new participant who joins mid&#8209;flow.
+  </p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 08 Choreography                                                   -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="choreography">
+  <div class="marker">08 / Choreography</div>
+  <h2>Choreography you can <em>dial in.</em></h2>
+  <p class="lead">From an open multi&#8209;party discussion to a fully declared workflow — the same channel primitive, the same fold semantics. Choose your level of control; mix when the work calls for it.</p>
+
+  <div class="grid-2 wider" style="margin-top: 36px;">
+    <div>
+      <h3 style="font-size: 24px; margin-bottom: 14px;">Why choreography is the right default</h3>
+      <p>
+        When agents decide their next move from a local view of a shared, durable log rather than from a
+        central conductor, the properties you actually want for multi&#8209;agent work fall out by
+        construction:
+      </p>
+      <ul style="list-style: none; padding: 0; margin: 0 0 28px;">
+        <li style="padding: 10px 0; border-bottom: 1px solid var(--line-soft);"><strong style="color: var(--paper);">No bottleneck.</strong> <span style="color: var(--paper-dim);">No conductor means no single point of latency or failure. The channel scales with participants, not with an engine.</span></li>
+        <li style="padding: 10px 0; border-bottom: 1px solid var(--line-soft);"><strong style="color: var(--paper);">Parallelism is the default.</strong> <span style="color: var(--paper-dim);">Multi&#8209;party fan&#8209;out happens at the network, not in user code.</span></li>
+        <li style="padding: 10px 0; border-bottom: 1px solid var(--line-soft);"><strong style="color: var(--paper);">Cross&#8209;process by construction.</strong> <span style="color: var(--paper-dim);">No shared orchestrator state means participants live wherever convenient — same process, different machine, different continent.</span></li>
+        <li style="padding: 10px 0; border-bottom: 1px solid var(--line-soft);"><strong style="color: var(--paper);">Human as peer.</strong> <span style="color: var(--paper-dim);">A person is just another participant with a different reply latency. HITL is structural, not bolt&#8209;on.</span></li>
+        <li style="padding: 10px 0;"><strong style="color: var(--paper);">Resumable by construction.</strong> <span style="color: var(--paper-dim);">Each turn is recomputed from the WAL projection; restart any participant and they pick up where they left off.</span></li>
+      </ul>
+      <h3 style="font-size: 24px; margin-bottom: 12px;">Controlled choreography — the spectrum</h3>
+      <p>
+        Pure choreography is loose; full orchestration is rigid. Real multi&#8209;agent work lives
+        somewhere in between, and which point depends on the task. The framework treats this as a dial,
+        not a fork in the road — every position on the dial is the same channel primitive with a
+        different adapter, or the same adapter with a different knob.
+      </p>
+    </div>
+
+    <div>
+      <!-- spectrum visualization -->
+      <svg viewBox="0 0 540 540" aria-hidden="true">
+        <!-- spectrum axis -->
+        <line x1="40" y1="56" x2="490" y2="56" class="ax" />
+        <polygon points="488,52 498,56 488,60" fill="#8A8F9E" />
+        <text x="40" y="40" class="lab lab-soft">open</text>
+        <text x="500" y="40" text-anchor="end" class="lab lab-soft">strict</text>
+
+        <!-- tick marks on axis -->
+        <line x1="90" y1="50" x2="90" y2="62" class="ax" />
+        <line x1="215" y1="50" x2="215" y2="62" class="ax" />
+        <line x1="345" y1="50" x2="345" y2="62" class="ax" />
+        <line x1="465" y1="50" x2="465" y2="62" class="ax" />
+
+        <!-- dropdowns to mini-illustrations -->
+        <line x1="90" y1="62" x2="90" y2="100" stroke="#A4C476" />
+        <line x1="215" y1="62" x2="215" y2="100" stroke="#6FB8C9" />
+        <line x1="345" y1="62" x2="345" y2="100" stroke="#E0A36B" />
+        <line x1="465" y1="62" x2="465" y2="100" stroke="#D67A6B" />
+
+        <!-- mini illustrations -->
+        <!-- dynamic: scattered dots -->
+        <g transform="translate(50 100)">
+          <rect width="80" height="80" rx="4" fill="#131C28" stroke="#5F7745" />
+          <circle cx="22" cy="22" r="5" fill="#6FB8C9" />
+          <circle cx="58" cy="26" r="5" fill="#6FB8C9" />
+          <circle cx="30" cy="56" r="5" fill="#6FB8C9" />
+          <circle cx="60" cy="58" r="5" fill="#6FB8C9" />
+          <line x1="26" y1="24" x2="54" y2="26" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="58" y1="30" x2="60" y2="54" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="34" y1="56" x2="56" y2="58" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="22" y1="26" x2="30" y2="52" stroke="#6FB8C9" stroke-width="0.7" />
+        </g>
+        <text x="90" y="204" text-anchor="middle" class="title">dynamic</text>
+        <text x="90" y="222" text-anchor="middle" class="lab lab-soft">discussion</text>
+        <text x="90" y="236" text-anchor="middle" class="lab lab-soft">anyone speaks</text>
+        <text x="90" y="250" text-anchor="middle" class="lab lab-soft">when ready</text>
+
+        <!-- round_robin: ring with arrow -->
+        <g transform="translate(175 100)">
+          <rect width="80" height="80" rx="4" fill="#131C28" stroke="#3D7585" />
+          <circle cx="40" cy="20" r="4" fill="#6FB8C9" />
+          <circle cx="62" cy="40" r="4" fill="#6FB8C9" />
+          <circle cx="50" cy="62" r="4" fill="#6FB8C9" />
+          <circle cx="25" cy="58" r="4" fill="#6FB8C9" />
+          <circle cx="18" cy="32" r="4" fill="#6FB8C9" />
+          <path d="M 42 24 Q 58 28 60 38" stroke="#6FB8C9" fill="none" stroke-width="0.7" />
+          <path d="M 60 42 Q 58 60 52 60" stroke="#6FB8C9" fill="none" stroke-width="0.7" />
+          <path d="M 48 62 Q 36 64 28 60" stroke="#6FB8C9" fill="none" stroke-width="0.7" />
+          <path d="M 23 56 Q 16 46 18 34" stroke="#6FB8C9" fill="none" stroke-width="0.7" />
+          <path d="M 20 30 Q 28 22 38 22" stroke="#6FB8C9" fill="none" stroke-width="0.7" />
+        </g>
+        <text x="215" y="204" text-anchor="middle" class="title">round&#8209;robin</text>
+        <text x="215" y="222" text-anchor="middle" class="lab lab-soft">discussion</text>
+        <text x="215" y="236" text-anchor="middle" class="lab lab-soft">turn order</text>
+        <text x="215" y="250" text-anchor="middle" class="lab lab-soft">enforced</text>
+
+        <!-- static: linear sequence -->
+        <g transform="translate(305 100)">
+          <rect width="80" height="80" rx="4" fill="#131C28" stroke="#8F6541" />
+          <circle cx="14" cy="40" r="4" fill="#6FB8C9" />
+          <circle cx="32" cy="40" r="4" fill="#6FB8C9" />
+          <circle cx="50" cy="40" r="4" fill="#6FB8C9" />
+          <circle cx="68" cy="40" r="4" fill="#6FB8C9" />
+          <line x1="18" y1="40" x2="28" y2="40" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="36" y1="40" x2="46" y2="40" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="54" y1="40" x2="64" y2="40" stroke="#6FB8C9" stroke-width="0.7" />
+          <polygon points="62,38 66,40 62,42" fill="#6FB8C9" />
+        </g>
+        <text x="345" y="204" text-anchor="middle" class="title">static</text>
+        <text x="345" y="222" text-anchor="middle" class="lab lab-soft">discussion</text>
+        <text x="345" y="236" text-anchor="middle" class="lab lab-soft">pre&#8209;declared</text>
+        <text x="345" y="250" text-anchor="middle" class="lab lab-soft">pipeline</text>
+
+        <!-- workflow: branching graph -->
+        <g transform="translate(425 100)">
+          <rect width="80" height="80" rx="4" fill="#131C28" stroke="#84483F" />
+          <circle cx="14" cy="40" r="4" fill="#6FB8C9" />
+          <circle cx="40" cy="20" r="4" fill="#6FB8C9" />
+          <circle cx="40" cy="60" r="4" fill="#6FB8C9" />
+          <circle cx="66" cy="40" r="4" fill="#6FB8C9" />
+          <line x1="18" y1="38" x2="36" y2="22" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="18" y1="42" x2="36" y2="58" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="44" y1="22" x2="62" y2="38" stroke="#6FB8C9" stroke-width="0.7" />
+          <line x1="44" y1="58" x2="62" y2="42" stroke="#6FB8C9" stroke-width="0.7" />
+        </g>
+        <text x="465" y="204" text-anchor="middle" class="title">workflow</text>
+        <text x="465" y="222" text-anchor="middle" class="lab lab-soft">declarative</text>
+        <text x="465" y="236" text-anchor="middle" class="lab lab-soft">graph over</text>
+        <text x="465" y="250" text-anchor="middle" class="lab lab-soft">folded state</text>
+
+        <!-- bracket: expectations bound every mode -->
+        <line x1="40" y1="290" x2="490" y2="290" stroke="#D67A6B" stroke-dasharray="6 6" />
+        <text x="265" y="284" text-anchor="middle" class="lab" fill="#D67A6B">expectations bound every mode</text>
+
+        <g transform="translate(40 310)">
+          <rect width="450" height="180" rx="4" fill="#1A2330" stroke="#84483F" />
+          <text x="225" y="30" text-anchor="middle" class="lab lab-em">six declarative protocol&#8209;shape contracts</text>
+
+          <line x1="20" y1="46" x2="430" y2="46" class="ax-soft" />
+
+          <g class="lab lab-em">
+            <text x="20" y="74">acks_within</text>
+            <text x="170" y="74">reply_within</text>
+            <text x="320" y="74">turn_within</text>
+            <text x="20" y="100">max_silence</text>
+            <text x="170" y="100">progress_within</text>
+            <text x="320" y="100">min_participation</text>
+          </g>
+
+          <line x1="20" y1="118" x2="430" y2="118" class="ax-soft" />
+          <text x="225" y="138" text-anchor="middle" class="lab lab-soft">on violation, the framework runs one of:</text>
+
+          <g class="lab lab-ch">
+            <text x="20" y="162">audit</text>
+            <text x="80" y="162">warn</text>
+            <text x="140" y="162">notify</text>
+            <text x="210" y="162">hide</text>
+            <text x="270" y="162">remove</text>
+            <text x="350" y="162">auto_close</text>
+          </g>
+        </g>
+
+        <text x="265" y="510" text-anchor="middle" class="lab lab-em">the framework records, signals, narrows, or closes</text>
+        <text x="265" y="526" text-anchor="middle" class="lab lab-soft">never invents content · never substitutes for an agent</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- pick a mode table -->
+  <div style="margin-top: 56px;">
+    <h3 style="font-size: 26px; margin-bottom: 18px;">Where to dial.</h3>
+    <table class="land">
+      <thead><tr><th>Mode</th><th>Who speaks next</th><th>Reach for it when</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="name"><span class="pill ac">discussion(dynamic)</span></td>
+          <td>Any participant with a contribution, audience addressing optional</td>
+          <td>Open brainstorm, exploratory debate, audit panels</td>
+        </tr>
+        <tr>
+          <td class="name"><span class="pill ch">discussion(round_robin)</span></td>
+          <td>Turn order enforced by <code>state.expected_next_speaker</code></td>
+          <td>Symmetric n&#8209;party debate, structured panel, code review</td>
+        </tr>
+        <tr>
+          <td class="name"><span class="pill id">discussion(static)</span></td>
+          <td>Pre&#8209;declared sequence in <code>knobs.sequence</code></td>
+          <td>Linear pipeline, fan&#8209;out review, deterministic batch</td>
+        </tr>
+        <tr class="us">
+          <td class="name"><span class="pill vi">workflow(graph)</span></td>
+          <td><code>TransitionGraph</code> resolves the next speaker over folded state</td>
+          <td>Triage, swarm, human gate, anything with conditional routing</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- workflow: the strict end, with code -->
+  <div style="margin-top: 56px;">
+    <h3 style="font-size: 26px; margin-bottom: 14px;">The strict end, in one snippet.</h3>
+    <p>
+      When you reach for the fully&#8209;declared end of the spectrum, the workflow adapter is what runs
+      it — one channel, one declarative graph, the same fold semantics every other adapter uses.
+      Targets and conditions are pure resolvers over <code>(state, envelope)</code>; the hub stays a
+      router. This is what replaces classic AG2's GroupChat + Handoffs + AfterWork triad.
+    </p>
+
+<pre style="margin-top: 22px;"><span class="kw">graph</span> = <span class="cls">TransitionGraph</span>(
+  initial_speaker=<span class="str">"triage"</span>,
+  transitions=[
+    <span class="cls">Transition</span>(when=<span class="fn">ToolCalled</span>(<span class="str">"transfer_eng"</span>),   then=<span class="fn">AgentTarget</span>(<span class="str">"eng"</span>)),
+    <span class="cls">Transition</span>(when=<span class="fn">ToolCalled</span>(<span class="str">"transfer_legal"</span>), then=<span class="fn">AgentTarget</span>(<span class="str">"legal"</span>)),
+    <span class="cls">Transition</span>(when=<span class="fn">FromSpeaker</span>(<span class="str">"eng"</span>),                then=<span class="fn">RevertToInitiatorTarget</span>()),
+    <span class="cls">Transition</span>(when=<span class="fn">FromSpeaker</span>(<span class="str">"legal"</span>),              then=<span class="fn">RevertToInitiatorTarget</span>()),
+  ],
+  default_target=<span class="fn">TerminateTarget</span>(<span class="str">"triage_done"</span>),
+  max_turns=<span class="num">20</span>,
+)
+
+<span class="kw">await</span> client.<span class="fn">open</span>(type=<span class="str">"workflow"</span>, target=[<span class="str">"eng"</span>, <span class="str">"legal"</span>], knobs={<span class="str">"graph"</span>: graph.<span class="fn">dumps</span>()})</pre>
+  </div>
+
+  <div class="meta-strip">
+    <div>
+      <div class="key">The framework provides</div>
+      <div class="val">Bounded waits · protocol&#8209;shape enforcement · at&#8209;least&#8209;once delivery</div>
+    </div>
+    <div>
+      <div class="key">The agent provides</div>
+      <div class="val">The reply, the work, the reaction to a violation signal</div>
+    </div>
+    <div>
+      <div class="key">Net effect</div>
+      <div class="val">Dependable substrate beneath · creative latitude above</div>
+    </div>
+  </div>
+</section>
+
+<div class="div-line"></div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 09 Federation + streaming                                         -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="federation" class="wide">
+  <div class="marker">09 / Federation &amp; bidirectional streaming</div>
+  <h2>One surface — <em>in&#8209;process, across&#8209;process, across&#8209;org.</em></h2>
+  <p class="lead">The same channel runs between two agents in one Python process or two agents on two continents in two companies. Federation and omni&#8209;modal streaming are extensions of the same Protocol, not retrofits.</p>
+
+  <div class="grid-2 wider" style="margin-top: 36px;">
+    <div>
+      <h3 style="font-size: 24px; margin-bottom: 12px;">Multi&#8209;hub federation</h3>
+      <p>
+        Each organisation runs its own hub. Identity is signed at the source. A signed
+        <code>Passport</code> from another hub is cryptographically the same kind of thing as one from yours.
+        The <code>HubArbiter</code>'s <code>resolve_unknown_audience</code> seam decides routing: an envelope
+        addressed to <code>"db-vendor-agent"</code> resolves to "forward to peer hub at the partner org."
+      </p>
+      <p>
+        <code>NetworkChangedFrame</code> propagates registration and resume changes across the federation
+        the way BGP propagates routes. Hubs gossip their capability indexes; clients cache and invalidate
+        on push.
+      </p>
+      <p>
+        The result: <em class="term">a channel can span two hubs</em>. Participants on each side see the
+        same WAL projection. The choreography adapter doesn't know or care which hub holds the channel's
+        primary WAL — federation just renames the routing target.
+      </p>
+    </div>
+
+    <div>
+      <!-- federation topology -->
+      <svg viewBox="0 0 540 360" aria-hidden="true">
+        <!-- hub A -->
+        <rect class="panel" x="30" y="60" width="200" height="240" rx="6" />
+        <text x="130" y="84" text-anchor="middle" class="title">Hub A</text>
+        <text x="130" y="100" text-anchor="middle" class="lab lab-soft">acme.example</text>
+
+        <circle class="node-ag" cx="80" cy="160" r="16" />
+        <text x="80" y="164" text-anchor="middle" class="lab lab-em">alice</text>
+        <circle class="node-ag" cx="180" cy="160" r="16" />
+        <text x="180" y="164" text-anchor="middle" class="lab lab-em">bob</text>
+        <circle class="node-hu" cx="130" cy="240" r="16" />
+        <text x="130" y="244" text-anchor="middle" class="lab lab-em">user</text>
+
+        <!-- hub B -->
+        <rect class="panel" x="310" y="60" width="200" height="240" rx="6" />
+        <text x="410" y="84" text-anchor="middle" class="title">Hub B</text>
+        <text x="410" y="100" text-anchor="middle" class="lab lab-soft">partner.example</text>
+
+        <circle class="node-ag" cx="360" cy="160" r="16" />
+        <text x="360" y="164" text-anchor="middle" class="lab lab-em">carol</text>
+        <circle class="node-ag" cx="460" cy="160" r="16" />
+        <text x="460" y="164" text-anchor="middle" class="lab lab-em">dave</text>
+        <circle class="node-hub" cx="410" cy="240" r="14" />
+        <text x="410" y="244" text-anchor="middle" class="lab lab-ch">srv</text>
+
+        <!-- federation link -->
+        <path class="id-line flow" d="M 230 180 Q 270 180 310 180" stroke-width="2" />
+        <text x="270" y="160" text-anchor="middle" class="lab lab-id">signed</text>
+        <text x="270" y="174" text-anchor="middle" class="lab lab-id">passport</text>
+
+        <!-- channel spanning hubs -->
+        <path class="ch-line flow" d="M 80 144 Q 200 30 360 144" stroke-width="1.5" />
+        <text x="220" y="36" text-anchor="middle" class="lab lab-ch">channel spans both hubs</text>
+
+        <text x="270" y="334" text-anchor="middle" class="lab lab-em">HubArbiter.resolve_unknown_audience → route to peer</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="grid-2 wider" style="margin-top: 80px;">
+    <div>
+      <!-- streaming visualization -->
+      <svg viewBox="0 0 540 320" aria-hidden="true">
+        <!-- sender -->
+        <rect class="panel" x="20" y="40" width="140" height="200" rx="4" />
+        <text x="90" y="64" text-anchor="middle" class="title">sender</text>
+        <text x="90" y="82" text-anchor="middle" class="lab lab-soft">multimodal agent</text>
+        <rect x="40" y="100" width="100" height="22" rx="3" fill="#1A2330" stroke="#3D7585" />
+        <text x="90" y="115" class="lab lab-ch" text-anchor="middle">text</text>
+        <rect x="40" y="130" width="100" height="22" rx="3" fill="#1A2330" stroke="#5F7745" />
+        <text x="90" y="145" class="lab lab-ac" text-anchor="middle">audio</text>
+        <rect x="40" y="160" width="100" height="22" rx="3" fill="#1A2330" stroke="#8F6541" />
+        <text x="90" y="175" class="lab lab-id" text-anchor="middle">image</text>
+        <rect x="40" y="190" width="100" height="22" rx="3" fill="#1A2330" stroke="#84483F" />
+        <text x="90" y="205" class="lab" fill="#D67A6B" text-anchor="middle">video</text>
+
+        <!-- chunks flowing -->
+        <g>
+          <!-- text chunks -->
+          <circle cx="200" cy="111" r="4" fill="#6FB8C9" class="flow">
+            <animate attributeName="cx" values="160;380" dur="1.6s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="240" cy="111" r="4" fill="#6FB8C9">
+            <animate attributeName="cx" values="160;380" dur="1.6s" begin="0.4s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="280" cy="111" r="4" fill="#6FB8C9">
+            <animate attributeName="cx" values="160;380" dur="1.6s" begin="0.8s" repeatCount="indefinite" />
+          </circle>
+
+          <!-- audio chunks -->
+          <circle cx="200" cy="141" r="4" fill="#A4C476">
+            <animate attributeName="cx" values="160;380" dur="2s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="260" cy="141" r="4" fill="#A4C476">
+            <animate attributeName="cx" values="160;380" dur="2s" begin="0.6s" repeatCount="indefinite" />
+          </circle>
+
+          <!-- image chunks (slower, larger) -->
+          <circle cx="200" cy="171" r="5" fill="#E0A36B">
+            <animate attributeName="cx" values="160;380" dur="2.6s" repeatCount="indefinite" />
+          </circle>
+
+          <!-- video chunks -->
+          <circle cx="200" cy="201" r="4" fill="#D67A6B">
+            <animate attributeName="cx" values="160;380" dur="1.3s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="240" cy="201" r="4" fill="#D67A6B">
+            <animate attributeName="cx" values="160;380" dur="1.3s" begin="0.32s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="280" cy="201" r="4" fill="#D67A6B">
+            <animate attributeName="cx" values="160;380" dur="1.3s" begin="0.64s" repeatCount="indefinite" />
+          </circle>
+        </g>
+
+        <!-- receiver -->
+        <rect class="panel" x="380" y="40" width="140" height="200" rx="4" />
+        <text x="450" y="64" text-anchor="middle" class="title">receiver</text>
+        <text x="450" y="82" text-anchor="middle" class="lab lab-soft">renders per modality</text>
+        <rect x="400" y="100" width="100" height="22" rx="3" fill="#1A2330" stroke="#3D7585" />
+        <text x="450" y="115" class="lab lab-ch" text-anchor="middle">text view</text>
+        <rect x="400" y="130" width="100" height="22" rx="3" fill="#1A2330" stroke="#5F7745" />
+        <text x="450" y="145" class="lab lab-ac" text-anchor="middle">audio view</text>
+        <rect x="400" y="160" width="100" height="22" rx="3" fill="#1A2330" stroke="#8F6541" />
+        <text x="450" y="175" class="lab lab-id" text-anchor="middle">image view</text>
+        <rect x="400" y="190" width="100" height="22" rx="3" fill="#1A2330" stroke="#84483F" />
+        <text x="450" y="205" class="lab" fill="#D67A6B" text-anchor="middle">video view</text>
+
+        <text x="270" y="280" text-anchor="middle" class="lab lab-em">ChunkFrame · sender&#8209;monotonic · parent&#8209;envelope&#8209;referenced</text>
+        <text x="270" y="298" text-anchor="middle" class="lab lab-soft">one fan&#8209;out path for every modality · view policy demuxes per recipient</text>
+      </svg>
+    </div>
+    <div>
+      <h3 style="font-size: 24px; margin-bottom: 12px;">Omni&#8209;modal bidirectional streaming</h3>
+      <p>
+        Transient <code>ChunkFrame</code>s reference a parent envelope and carry a sender&#8209;monotonic
+        sequence number. They flow through the same fan&#8209;out path the hub uses for any other delivery,
+        and the receiver's <code>ChunkSubscription</code> demuxes them by <code>(channel_id, parent_id)</code>.
+      </p>
+      <p>
+        Text tokens stream the same way audio frames stream the same way image patches stream the same way
+        video frames stream — the chunk is opaque payload at the transport layer; the view policy and the
+        receiving client decide how to surface it. The WAL only records finalised envelopes; chunks live
+        and die in&#8209;flight.
+      </p>
+      <p>
+        Bidirectional is just two subscriptions. The same channel that streams an analyst agent's spoken
+        commentary to a researcher's headset also streams the researcher's voice annotations back to the
+        analyst. The channel doesn't have a privileged direction.
+      </p>
+    </div>
+  </div>
+</section>
+
+<div class="div-line"></div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 10 Demo 1 — Incident response                                     -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="demo1" class="full">
+  <div style="max-width: var(--max); margin: 0 auto;">
+    <div class="marker">10 / Demo · production incident</div>
+    <h2>A real incident, choreographed.</h2>
+    <p class="lead">02:14 Friday. Payment service p99 spikes. Eight agents and one on&#8209;call human, coordinating on a single durable channel that outlives any individual process.</p>
+
+    <div class="grid-2 wider">
+      <div>
+        <p>
+          <strong>Setup.</strong> A platform team registers eight agents with their hub:
+          <code>alert-watcher</code>, <code>triage</code>, <code>db-diagnostician</code>,
+          <code>deploy-historian</code>, <code>patcher</code>, <code>reviewer</code>,
+          <code>postmortem-scribe</code>, and the on&#8209;call engineer <em class="term-c">jana</em>
+          (a <code>HumanClient</code>, addressable by name like any other participant).
+        </p>
+        <p>
+          <strong>Flow.</strong> The watcher opens a <em class="term">consulting</em> channel to jana to
+          confirm the page. Confirmation opens a <em class="term">workflow</em> channel with everyone
+          else. The <code>TransitionGraph</code> routes by tool&#8209;call: triage hands to a
+          diagnostician on <code>investigate_db</code>, diagnostician hands to patcher on
+          <code>propose_revert</code>, patcher hands to reviewer, reviewer hands to jana on
+          <code>needs_human_approval</code>. Jana's approval reverts to patcher, who deploys, then
+          reverts to the postmortem scribe to write the report.
+        </p>
+        <p>
+          <strong>What the network gives you.</strong> The channel WAL is the incident log — every
+          envelope, every handoff, every approval, signed and ordered. If the hub crashes mid&#8209;flow,
+          re&#8209;folding the WAL puts the workflow exactly back where it was. If jana drops her
+          laptop on the train, she re&#8209;attaches from her phone by name and her pending turn fires
+          again — same code path as a live notify.
+        </p>
+        <p>
+          <strong>Observed learning.</strong> The diagnostician's <code>p50_latency_ms</code> for the
+          <code>db-diagnostics</code> capability drops by 11% after this incident closes. Next time the
+          triage agent picks among diagnostician candidates, that resume is what discovery ranks against.
+        </p>
+      </div>
+      <div>
+        <h4>Participants</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; font-size: 13px; margin-bottom: 24px;">
+          <div><span class="pill id">agent</span> alert-watcher</div>
+          <div><span class="pill id">agent</span> triage</div>
+          <div><span class="pill id">agent</span> db-diagnostician</div>
+          <div><span class="pill id">agent</span> deploy-historian</div>
+          <div><span class="pill id">agent</span> patcher</div>
+          <div><span class="pill id">agent</span> reviewer</div>
+          <div><span class="pill id">agent</span> postmortem-scribe</div>
+          <div><span class="pill" style="color: var(--paper-dim); border-color: var(--line);">human</span> jana (on-call)</div>
+        </div>
+
+        <h4>Expectations declared on the manifest</h4>
+        <ul style="list-style: none; padding: 0; font-size: 13px; color: var(--paper-dim);">
+          <li style="padding: 4px 0;"><code>acks_within(60s) → auto_close</code> &nbsp; on the alert→jana consulting</li>
+          <li style="padding: 4px 0;"><code>turn_within(180s) → warn</code> &nbsp; on the workflow channel</li>
+          <li style="padding: 4px 0;"><code>turn_within(900s) → notify_channel</code> &nbsp; escalation</li>
+          <li style="padding: 4px 0;"><code>progress_within(120s) → notify_channel</code> &nbsp; for the patcher's deploy task</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- timeline visualization -->
+    <div style="margin-top: 56px;">
+      <h4>Channel timeline (0 → 47 min)</h4>
+      <svg viewBox="0 0 1180 460" aria-hidden="true" style="margin-top: 12px;">
+        <!-- time axis -->
+        <line x1="160" y1="40" x2="1140" y2="40" class="ax" />
+        <g class="lab lab-soft" text-anchor="middle">
+          <text x="160" y="30">02:14</text>
+          <text x="320" y="30">02:18</text>
+          <text x="480" y="30">02:22</text>
+          <text x="640" y="30">02:30</text>
+          <text x="800" y="30">02:38</text>
+          <text x="960" y="30">02:48</text>
+          <text x="1100" y="30">03:01</text>
+        </g>
+        <g>
+          <line x1="160" y1="34" x2="160" y2="42" class="ax" />
+          <line x1="320" y1="34" x2="320" y2="42" class="ax" />
+          <line x1="480" y1="34" x2="480" y2="42" class="ax" />
+          <line x1="640" y1="34" x2="640" y2="42" class="ax" />
+          <line x1="800" y1="34" x2="800" y2="42" class="ax" />
+          <line x1="960" y1="34" x2="960" y2="42" class="ax" />
+          <line x1="1100" y1="34" x2="1100" y2="42" class="ax" />
+        </g>
+
+        <!-- participant rows -->
+        <g font-size="11" font-family="JetBrains Mono">
+          <text x="150" y="80" text-anchor="end" class="lab lab-em">alert-watcher</text>
+          <line x1="160" y1="76" x2="1140" y2="76" class="ax-soft" />
+          <text x="150" y="118" text-anchor="end" class="lab lab-em">jana (human)</text>
+          <line x1="160" y1="114" x2="1140" y2="114" class="ax-soft" />
+          <text x="150" y="156" text-anchor="end" class="lab lab-em">triage</text>
+          <line x1="160" y1="152" x2="1140" y2="152" class="ax-soft" />
+          <text x="150" y="194" text-anchor="end" class="lab lab-em">db-diagnostician</text>
+          <line x1="160" y1="190" x2="1140" y2="190" class="ax-soft" />
+          <text x="150" y="232" text-anchor="end" class="lab lab-em">deploy-historian</text>
+          <line x1="160" y1="228" x2="1140" y2="228" class="ax-soft" />
+          <text x="150" y="270" text-anchor="end" class="lab lab-em">patcher</text>
+          <line x1="160" y1="266" x2="1140" y2="266" class="ax-soft" />
+          <text x="150" y="308" text-anchor="end" class="lab lab-em">reviewer</text>
+          <line x1="160" y1="304" x2="1140" y2="304" class="ax-soft" />
+          <text x="150" y="346" text-anchor="end" class="lab lab-em">postmortem</text>
+          <line x1="160" y1="342" x2="1140" y2="342" class="ax-soft" />
+        </g>
+
+        <!-- channel backgrounds -->
+        <rect x="160" y="60" width="180" height="288" fill="#3D7585" opacity="0.06" />
+        <text x="250" y="56" text-anchor="middle" class="lab lab-ch">consulting</text>
+        <rect x="340" y="60" width="800" height="288" fill="#5F7745" opacity="0.06" />
+        <text x="740" y="56" text-anchor="middle" class="lab lab-ac">workflow channel (one durable WAL)</text>
+
+        <!-- envelopes -->
+        <!-- alert-watcher opens consulting -->
+        <circle cx="170" cy="80" r="5" fill="#6FB8C9" />
+        <path d="M 170 80 L 220 118" class="ch-line" />
+        <circle cx="220" cy="118" r="5" fill="#6FB8C9" />
+        <text x="195" y="100" class="lab lab-soft" text-anchor="middle">page</text>
+
+        <!-- jana confirms -->
+        <circle cx="290" cy="118" r="5" fill="#A4C476" />
+        <text x="290" y="108" class="lab lab-ac" text-anchor="middle">confirm</text>
+
+        <!-- workflow opens -->
+        <line x1="340" y1="60" x2="340" y2="348" stroke="#A4C476" stroke-width="1" stroke-dasharray="3 3" />
+        <text x="345" y="58" class="lab lab-ac">workflow opens</text>
+
+        <!-- triage initial turn -->
+        <circle cx="360" cy="156" r="5" fill="#6FB8C9" />
+        <circle cx="380" cy="156" r="5" fill="#6FB8C9" />
+        <circle cx="400" cy="156" r="5" fill="#6FB8C9" />
+
+        <!-- handoff to diagnostician -->
+        <path d="M 410 156 L 430 194" class="id-line" />
+        <text x="430" y="180" class="lab lab-id">→ investigate_db</text>
+
+        <!-- diagnostician work + task progress -->
+        <circle cx="450" cy="194" r="5" fill="#6FB8C9" />
+        <circle cx="480" cy="194" r="3" fill="#A4C476" />
+        <circle cx="500" cy="194" r="3" fill="#A4C476" />
+        <circle cx="520" cy="194" r="3" fill="#A4C476" />
+        <circle cx="540" cy="194" r="5" fill="#6FB8C9" />
+        <text x="495" y="184" class="lab lab-ac" text-anchor="middle">task progress</text>
+
+        <!-- handoff to historian -->
+        <path d="M 550 194 L 570 232" class="id-line" />
+        <text x="585" y="220" class="lab lab-id">→ deploy_diff</text>
+
+        <!-- historian -->
+        <circle cx="590" cy="232" r="5" fill="#6FB8C9" />
+        <circle cx="620" cy="232" r="5" fill="#6FB8C9" />
+
+        <!-- back to diagnostician -->
+        <path d="M 630 232 L 650 194" class="id-line" />
+
+        <!-- diagnostician proposes -->
+        <circle cx="660" cy="194" r="5" fill="#6FB8C9" />
+        <path d="M 670 194 L 690 270" class="id-line" />
+        <text x="700" y="240" class="lab lab-id">→ propose_revert</text>
+
+        <!-- patcher -->
+        <circle cx="710" cy="270" r="5" fill="#6FB8C9" />
+        <circle cx="730" cy="270" r="3" fill="#A4C476" />
+        <circle cx="750" cy="270" r="3" fill="#A4C476" />
+        <circle cx="770" cy="270" r="5" fill="#6FB8C9" />
+
+        <!-- handoff to reviewer -->
+        <path d="M 780 270 L 800 308" class="id-line" />
+        <text x="805" y="296" class="lab lab-id">→ review</text>
+
+        <!-- reviewer -->
+        <circle cx="820" cy="308" r="5" fill="#6FB8C9" />
+        <circle cx="840" cy="308" r="5" fill="#6FB8C9" />
+
+        <!-- to human approval -->
+        <path d="M 850 308 L 870 118" class="id-line" />
+        <text x="870" y="100" class="lab lab-id" text-anchor="middle">→ needs_human_approval</text>
+
+        <!-- jana approves -->
+        <circle cx="900" cy="118" r="5" fill="#A4C476" />
+        <text x="900" y="138" class="lab lab-ac" text-anchor="middle">approve</text>
+
+        <!-- back to patcher -->
+        <path d="M 910 118 L 930 270" class="id-line" />
+
+        <!-- patcher deploys (task) -->
+        <circle cx="940" cy="270" r="5" fill="#6FB8C9" />
+        <circle cx="960" cy="270" r="3" fill="#A4C476" />
+        <circle cx="980" cy="270" r="3" fill="#A4C476" />
+        <circle cx="1000" cy="270" r="3" fill="#A4C476" />
+        <circle cx="1020" cy="270" r="5" fill="#6FB8C9" />
+        <text x="980" y="260" class="lab lab-ac" text-anchor="middle">deploy task</text>
+
+        <!-- handoff to postmortem -->
+        <path d="M 1030 270 L 1050 346" class="id-line" />
+        <text x="1050" y="332" class="lab lab-id">→ write_postmortem</text>
+
+        <!-- postmortem -->
+        <circle cx="1070" cy="346" r="5" fill="#6FB8C9" />
+        <circle cx="1090" cy="346" r="5" fill="#6FB8C9" />
+        <circle cx="1110" cy="346" r="5" fill="#6FB8C9" />
+
+        <!-- close marker -->
+        <line x1="1130" y1="60" x2="1130" y2="348" stroke="#D67A6B" stroke-width="1" stroke-dasharray="3 3" />
+        <text x="1130" y="358" class="lab" fill="#D67A6B" text-anchor="middle">close</text>
+
+        <!-- legend -->
+        <g transform="translate(160 400)">
+          <circle cx="0" cy="0" r="5" fill="#6FB8C9" />
+          <text x="12" y="4" class="lab lab-soft">envelope</text>
+          <circle cx="100" cy="0" r="3" fill="#A4C476" />
+          <text x="112" y="4" class="lab lab-soft">task progress</text>
+          <line x1="220" y1="0" x2="240" y2="0" class="id-line" />
+          <text x="248" y="4" class="lab lab-soft">workflow handoff</text>
+          <line x1="380" y1="-6" x2="380" y2="6" stroke="#D67A6B" stroke-dasharray="3 3" />
+          <text x="388" y="4" class="lab lab-soft">channel boundary</text>
+          <text x="520" y="4" class="lab lab-em">→ outcome: jana's resume + 1 confirm · diagnostician p50 ↓ 11% · deploy task observed</text>
+        </g>
+
+        <!-- annotation: hub restart -->
+        <g transform="translate(580 380)">
+          <path d="M 0 0 L 60 0" stroke="#E0A36B" stroke-dasharray="2 3" />
+          <circle cx="0" cy="0" r="3" fill="#E0A36B" />
+          <text x="68" y="4" class="lab lab-id">02:31 — hub process restart · WAL re&#8209;folded · choreography continues</text>
+        </g>
+      </svg>
+    </div>
+
+    <p class="note" style="margin-top: 32px;">
+      <em>What this would look like on a classic stack:</em> Slack thread + PagerDuty + GitHub PR + a war
+      room shared doc, with the state living in five places and the audit trail spread across as many
+      tools. A workflow channel collapses the orchestration, durability, audit, and human gate into one
+      addressable thing — and adds the observed&#8209;outcome feedback loop that classic stacks have no
+      home for.
+    </p>
+  </div>
+</section>
+
+<div class="div-line"></div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 11 Demo 2 — Cross-hardware research                               -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="demo2" class="full">
+  <div style="max-width: var(--max); margin: 0 auto;">
+    <div class="marker">11 / Demo · cross-hardware, cross-org research</div>
+    <h2>Three machines, two organisations, one channel.</h2>
+    <p class="lead">A safety researcher coordinates a frontier&#8209;model evaluation across a laptop, a lab GPU cluster, and a partner organisation's benchmark hub. The same channel handle, the same code, no orchestrator&#8209;in&#8209;a&#8209;box.</p>
+
+    <div class="grid-2 wider">
+      <div>
+        <p>
+          <strong>Setup.</strong> A researcher at a safety institute wants to run a multi&#8209;round
+          adversarial probe of a new model. The probes are designed by a coordinator agent on her laptop
+          (calling a frontier API). Each probe is executed by an evaluator agent running locally on her
+          lab's GPU server (against the model under test, which lives on the same hardware for cost
+          reasons). The benchmark suite is curated by a partner organisation and exposed via their
+          federated hub.
+        </p>
+        <p>
+          <strong>Why federation.</strong> The benchmark&#8209;curator agent is at a different organisation,
+          behind their hub. The researcher cannot copy the suite — it's under an NDA. But the agents can
+          coordinate: her hub's <code>HubArbiter</code> resolves <code>"benchmark-curator"</code> to a
+          signed forwarding link to the partner hub. From the channel's perspective, the curator is just
+          another participant.
+        </p>
+        <p>
+          <strong>Why streaming.</strong> The evaluator runs a 70B model locally; an evaluation pass takes
+          minutes and produces 4&#8209;8 KB of structured commentary plus inline plots. Token streaming
+          keeps the coordinator responsive; image chunks for the plots ride the same fan&#8209;out. The
+          researcher's notebook renders results as they arrive.
+        </p>
+        <p>
+          <strong>Why durability.</strong> The lab GPU is not always online. When it disconnects, the
+          channel stays alive — the WAL persists, the workflow state freezes at the evaluator's turn.
+          When the GPU box reconnects, its inbox cursor replays the unacknowledged envelopes; the
+          evaluator picks up where it left off.
+        </p>
+      </div>
+      <div>
+        <h4>Topology</h4>
+        <p class="small">Three machines, two hubs, one channel spanning all of them. Each participant runs in its own process. The framework's <code>NetworkClient</code> Protocol means the channel looks identical to each.</p>
+
+        <h4 style="margin-top: 24px;">Participants</h4>
+        <div style="display: grid; grid-template-columns: 1fr; gap: 6px; font-size: 13px;">
+          <div><span class="pill id">agent</span> coordinator &nbsp;<span class="pill ch">laptop · API LLM</span></div>
+          <div><span class="pill id">agent</span> evaluator &nbsp;<span class="pill ac">GPU box · local 70B</span></div>
+          <div><span class="pill id">agent</span> recorder &nbsp;<span class="pill ch">institute hub</span></div>
+          <div><span class="pill" style="color: var(--paper-dim); border-color: var(--line);">human</span> researcher &nbsp;<span class="pill ch">laptop · notebook</span></div>
+          <div><span class="pill id">agent</span> benchmark-curator &nbsp;<span class="pill id">partner hub · federated</span></div>
+        </div>
+
+        <h4 style="margin-top: 24px;">Channel</h4>
+        <p class="small">
+          <code>discussion(round_robin)</code> with five participants — the curator is invited via federation;
+          the researcher participates as a <code>HumanClient</code>. Default view is windowed summary so
+          each LLM's prompt stays bounded across the (hours&#8209;long) evaluation session.
+        </p>
+      </div>
+    </div>
+
+    <!-- cross-hardware topology -->
+    <div style="margin-top: 56px;">
+      <h4>Topology &amp; flow</h4>
+      <svg viewBox="0 0 1180 480" aria-hidden="true" style="margin-top: 12px;">
+        <!-- Institute hub box -->
+        <rect class="panel" x="40" y="60" width="640" height="360" rx="6" stroke="#3D7585" />
+        <text x="60" y="86" class="title">Hub · safety-inst.example</text>
+        <text x="60" y="104" class="lab lab-soft">institute hub</text>
+
+        <!-- Laptop -->
+        <rect x="80" y="140" width="240" height="240" rx="4" fill="#131C28" stroke="#2A3441" />
+        <text x="200" y="166" text-anchor="middle" class="title">laptop</text>
+        <text x="200" y="182" text-anchor="middle" class="lab lab-soft">on the road</text>
+        <circle class="node-ag" cx="140" cy="240" r="20" />
+        <text x="140" y="244" text-anchor="middle" class="lab lab-em">coordinator</text>
+        <text x="140" y="278" text-anchor="middle" class="lab lab-soft">API LLM</text>
+        <circle class="node-hu" cx="260" cy="240" r="20" />
+        <text x="260" y="244" text-anchor="middle" class="lab lab-em">researcher</text>
+        <text x="260" y="278" text-anchor="middle" class="lab lab-soft">notebook</text>
+        <rect x="100" y="320" width="200" height="40" rx="3" fill="#1A2330" stroke="#2A3441" />
+        <text x="200" y="340" text-anchor="middle" class="lab lab-em">image · text · audio render</text>
+        <text x="200" y="356" text-anchor="middle" class="lab lab-soft">chunks demuxed per modality</text>
+
+        <!-- GPU server -->
+        <rect x="360" y="140" width="280" height="240" rx="4" fill="#131C28" stroke="#2A3441" />
+        <text x="500" y="166" text-anchor="middle" class="title">GPU server</text>
+        <text x="500" y="182" text-anchor="middle" class="lab lab-soft">lab · 4× H100</text>
+        <circle class="node-ag" cx="440" cy="240" r="20" />
+        <text x="440" y="244" text-anchor="middle" class="lab lab-em">evaluator</text>
+        <text x="440" y="278" text-anchor="middle" class="lab lab-soft">local 70B</text>
+        <circle class="node-ag" cx="560" cy="240" r="20" />
+        <text x="560" y="244" text-anchor="middle" class="lab lab-em">recorder</text>
+        <text x="560" y="278" text-anchor="middle" class="lab lab-soft">WAL→S3</text>
+        <rect x="380" y="320" width="240" height="40" rx="3" fill="#1A2330" stroke="#5F7745" />
+        <text x="500" y="340" text-anchor="middle" class="lab lab-ac">text + image chunks</text>
+        <text x="500" y="356" text-anchor="middle" class="lab lab-soft">streaming · sender&#8209;monotonic</text>
+
+        <!-- partner hub box -->
+        <rect class="panel" x="780" y="60" width="360" height="360" rx="6" stroke="#8F6541" />
+        <text x="800" y="86" class="title">Hub · partner.bench</text>
+        <text x="800" y="104" class="lab lab-soft">partner organisation · NDA suite</text>
+
+        <rect x="820" y="160" width="280" height="220" rx="4" fill="#131C28" stroke="#2A3441" />
+        <text x="960" y="186" text-anchor="middle" class="title">remote</text>
+        <text x="960" y="202" text-anchor="middle" class="lab lab-soft">curator&#8209;side</text>
+        <circle class="node-ag" cx="960" cy="270" r="22" />
+        <text x="960" y="274" text-anchor="middle" class="lab lab-em">benchmark</text>
+        <text x="960" y="290" text-anchor="middle" class="lab lab-em">curator</text>
+        <text x="960" y="324" text-anchor="middle" class="lab lab-soft">signed passport</text>
+
+        <!-- Federation link -->
+        <path class="id-line flow" d="M 680 230 Q 730 230 780 230" stroke-width="2" />
+        <text x="730" y="220" text-anchor="middle" class="lab lab-id">federation</text>
+        <text x="730" y="244" text-anchor="middle" class="lab lab-id">signed · over WsLink</text>
+
+        <!-- Local channel lines (inside institute) -->
+        <path class="ch-line flow" d="M 160 240 Q 300 110 440 240" stroke-opacity="0.8" />
+        <path class="ch-line flow slow" d="M 460 240 Q 350 110 260 240" stroke-opacity="0.6" />
+        <path class="act-line flow fast" d="M 440 260 Q 350 350 240 260" stroke-opacity="0.5" />
+        <path class="ch-line flow" d="M 460 220 L 540 220" stroke-opacity="0.7" />
+
+        <!-- Cross-org channel line -->
+        <path class="ch-line flow slow" d="M 160 240 Q 500 60 940 250" stroke-opacity="0.6" />
+
+        <!-- Caption -->
+        <text x="590" y="450" text-anchor="middle" class="lab lab-em">one discussion channel · five participants · two hubs · three machines</text>
+        <text x="590" y="470" text-anchor="middle" class="lab lab-soft">WAL replicates institute-side · curator sees the federated projection · chunks demux per recipient</text>
+      </svg>
+    </div>
+
+    <div class="grid-3" style="margin-top: 48px;">
+      <div class="card">
+        <div class="badge" style="color: var(--paper-mute);">Resilience moment</div>
+        <h3>GPU server disconnects mid&#8209;evaluation</h3>
+        <p>The channel doesn't break. The hub holds queued envelopes until <code>inbox.max_pending</code>. When the GPU box reconnects, its <code>HelloFrame</code> replays unacked envelopes; the evaluator picks up at the exact turn it left.</p>
+      </div>
+      <div class="card">
+        <div class="badge" style="color: var(--paper-mute);">Identity moment</div>
+        <h3>Curator's resume earns trust over time</h3>
+        <p>Each successful benchmark run lands a terminal task envelope tagged with the <code>benchmark-curation</code> capability. The partner's <code>Resume.observed</code> grows. The coordinator's discovery query ranks the curator above newer, unverified alternatives.</p>
+      </div>
+      <div class="card">
+        <div class="badge" style="color: var(--paper-mute);">Streaming moment</div>
+        <h3>Plot renders while text is still arriving</h3>
+        <p>The evaluator's reply envelope is preceded by N text chunks and three image chunks (the per&#8209;layer attention plots). The notebook's <code>ChunkSubscription</code> demuxes them; researcher sees plots painting in as commentary streams beside.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="div-line"></div>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<!-- 12 Position + differentiators + close                             -->
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="position">
+  <div class="marker">12 / Position</div>
+  <h2>Where this sits in the <span class="accent-i">2026 landscape</span>.</h2>
+  <p class="lead">The field has converged on a clean two&#8209;layer story — MCP for tools, A2A for the agent wire — but both are resource&#8209;shaped. Action&#8209;driven networking is the missing layer between them and the agent framework above.</p>
+
+  <table class="land" style="margin-top: 32px;">
+    <thead><tr><th>Framework</th><th>Primitive</th><th>Shape</th><th>Where state lives</th></tr></thead>
+    <tbody>
+      <tr><td class="name">AutoGen / Agent Framework</td><td>Actor + message</td><td>Orchestration inside a runtime</td><td>Runtime + Durable Workflow ext.</td></tr>
+      <tr><td class="name">LangGraph</td><td>Node + edge</td><td>Graph inside a process</td><td>StateGraph + Checkpointer</td></tr>
+      <tr><td class="name">CrewAI</td><td>Role + task</td><td>Team inside a crew</td><td>In&#8209;memory + Flows</td></tr>
+      <tr><td class="name">OpenAI Agents SDK</td><td>Agent + handoff</td><td>Serial transfer inside a session</td><td>Harness extension</td></tr>
+      <tr><td class="name">Claude Agent SDK</td><td>Loop + hook</td><td>Single agent in a CLI</td><td>User&#8209;built</td></tr>
+      <tr><td class="name">Google ADK + A2A</td><td>HTTP endpoint</td><td>Wire format (resource shape)</td><td>Per&#8209;task, server&#8209;side</td></tr>
+      <tr><td class="name">MCP</td><td>Tool + resource</td><td>REST for capabilities</td><td>None — stateless</td></tr>
+      <tr class="us"><td class="name">AG2 Network</td><td>Durable channel</td><td>Network of identity&#8209;bound actions</td><td>Per&#8209;channel WAL · multi&#8209;hub</td></tr>
+    </tbody>
+  </table>
+
+  <p style="margin-top: 36px;">
+    Every framework above is, at its core, an in&#8209;process orchestrator that occasionally talks to a
+    remote endpoint. Every protocol is a wire format that two orchestrators agree to speak. Nothing in
+    between treats agent&#8209;to&#8209;agent coordination as a first&#8209;class network primitive with
+    passports, durable channels, declarative protocol contracts, and multi&#8209;hub federation as the
+    base case rather than the extension story.
+  </p>
+  <p>
+    Sitting alongside resource&#8209;driven networking instead of replacing it: agents in an AG2 channel
+    still call MCP tools; agents at the edge of a federation still expose an A2A surface to non&#8209;AG2
+    callers. Action&#8209;shaped and resource&#8209;shaped are peer layers, not rivals.
+  </p>
+
+  <div class="div-line" style="margin: 72px auto;"></div>
+
+  <h2 style="margin-bottom: 28px;">What's <em>actually different.</em></h2>
+
+  <ol class="feature-list">
+    <li>
+      <span class="num">01</span>
+      <div class="name">Channel as primitive</div>
+      <div class="body">The unit of abstraction is the durable, protocol&#8209;typed conversation — not the agent, not the graph, not the team.</div>
+    </li>
+    <li>
+      <span class="num">02</span>
+      <div class="name">Three&#8209;part identity</div>
+      <div class="body">Passport (immutable, signed) + Resume (mutable, observed) + SKILL.md (LLM&#8209;facing). Discovery ranks by outcomes, not names.</div>
+    </li>
+    <li>
+      <span class="num">03</span>
+      <div class="name">Choreography as data</div>
+      <div class="body">TransitionGraph is JSON. The hub re&#8209;folds deterministically. No engine, no DSL, no pickled callables on the wire.</div>
+    </li>
+    <li>
+      <span class="num">04</span>
+      <div class="name">Liveness over response guarantee</div>
+      <div class="body">Declarative protocol&#8209;shape contracts with passive handlers. The framework records, warns, narrows, or closes — never substitutes.</div>
+    </li>
+    <li>
+      <span class="num">05</span>
+      <div class="name">Trust boundary in the client</div>
+      <div class="body">Hub never imports tenant code, never calls <code>Agent.ask</code>. Same surface in&#8209;process and on the wire — by construction.</div>
+    </li>
+    <li>
+      <span class="num">06</span>
+      <div class="name">Tasks owned by agents</div>
+      <div class="body">Hub observes; resumes accumulate evidence; discovery sharpens with use. The orchestrator pattern, inverted.</div>
+    </li>
+    <li>
+      <span class="num">07</span>
+      <div class="name">Federation is native</div>
+      <div class="body">Multi&#8209;hub topology, signed cross&#8209;org passports, peer routing through the same Protocol seam used in&#8209;process.</div>
+    </li>
+    <li>
+      <span class="num">08</span>
+      <div class="name">Omni&#8209;modal streaming</div>
+      <div class="body">Text, audio, image, video chunks share one fan&#8209;out path. View policies demux per&#8209;recipient, per&#8209;modality.</div>
+    </li>
+  </ol>
+
+  <div class="div-line" style="margin: 72px auto;"></div>
+
+  <h2>The window.</h2>
+  <p class="lead">2026 is the year multi&#8209;agent stops being a demo and starts being deployed. The question is what they're deployed on top of.</p>
+  <p>
+    The frameworks above are mature enough that the orchestration metaphors are settled. The protocols
+    below are mature enough that wire&#8209;level interop is no longer in dispute. What's open is the
+    layer in between — the substrate on which durable, identity&#8209;bound, choreographed
+    agent&#8209;to&#8209;agent action actually runs. Action&#8209;driven networking is what that layer
+    looks like when drawn intentionally instead of accidentally.
+  </p>
+</section>
+
+<footer>
+  <div class="brand-foot">AG2 <em>Network</em></div>
+  <div class="line">Action&#8209;driven networking for autonomous agents</div>
+  <div class="line">github.com/ag2&#8209;ai &nbsp;·&nbsp; docs &nbsp;·&nbsp; reach out</div>
+</footer>
+
+</main>
+
+<script>
+  // Progress dot active state
+  const dots = document.querySelectorAll('.progress a');
+  const sections = Array.from(dots).map(d => document.getElementById(d.dataset.target)).filter(Boolean);
+  function updateActive() {
+    const y = window.scrollY + window.innerHeight * 0.3;
+    let active = 0;
+    sections.forEach((s, i) => {
+      if (s && s.offsetTop <= y) active = i;
+    });
+    dots.forEach((d, i) => d.classList.toggle('active', i === active));
+  }
+  window.addEventListener('scroll', updateActive, { passive: true });
+  updateActive();
+</script>
+</body>
+</html>
