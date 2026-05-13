@@ -55,7 +55,7 @@ async def test_list_agents_cached_until_invalidated() -> None:
     assert len(first) == 2
 
     # Same args land on the cache — verify by checking the dict directly.
-    assert ("list_agents", None, None, None, 50) in alice_hc._discovery_cache
+    assert ("list_agents", None, None, None, None, 50) in alice_hc._discovery_cache
 
     await alice_hc.shutdown()
     await bob_hc.shutdown()
@@ -72,7 +72,7 @@ async def test_register_broadcasts_and_invalidates_cache() -> None:
 
     initial = await alice_hc.list_agents()
     assert len(initial) == 1
-    assert ("list_agents", None, None, None, 50) in alice_hc._discovery_cache
+    assert ("list_agents", None, None, None, None, 50) in alice_hc._discovery_cache
 
     # Bob joins. Hub broadcasts NetworkChangedFrame to alice's endpoint.
     bob_hc = HubClient(LocalLink(hub), hub=hub)

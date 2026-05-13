@@ -12,6 +12,7 @@ modules — the trust boundary runs through ``HubClient`` /
 ``AgentClient`` (see ``client/``).
 """
 
+from .arbiter import Allow, BaseHubArbiter, Decision, Deny, HubArbiter, RuleBasedArbiter
 from .audit import (
     AUDIT_KIND_AGENT_REGISTERED,
     AUDIT_KIND_AGENT_UNREGISTERED,
@@ -23,9 +24,11 @@ from .audit import (
     AUDIT_KIND_RULE_SET,
     AUDIT_KIND_SKILL_SET,
     AUDIT_KIND_TASK_TERMINATED,
+    AUDIT_KIND_TURN_FAILED,
     RESUME_SOURCE_OBSERVED,
     RESUME_SOURCE_TENANT,
     AuditLog,
+    AuditSubscriber,
 )
 from .core import Hub, PendingTurn
 from .expectations import (
@@ -72,6 +75,7 @@ from .layout import (
     tasks_root,
     wal_path,
 )
+from .listener import BaseHubListener, HubListener
 
 __all__ = (
     "AUDIT_KIND_AGENT_REGISTERED",
@@ -84,16 +88,25 @@ __all__ = (
     "AUDIT_KIND_RULE_SET",
     "AUDIT_KIND_SKILL_SET",
     "AUDIT_KIND_TASK_TERMINATED",
+    "AUDIT_KIND_TURN_FAILED",
     "RESUME_SOURCE_OBSERVED",
     "RESUME_SOURCE_TENANT",
     "AcksWithinEvaluator",
+    "Allow",
     "AuditHandler",
     "AuditLog",
+    "AuditSubscriber",
     "AutoCloseHandler",
+    "BaseHubArbiter",
+    "BaseHubListener",
+    "Decision",
+    "Deny",
     "ExpectationContext",
     "ExpectationEvaluator",
     "HideHandler",
     "Hub",
+    "HubArbiter",
+    "HubListener",
     "MaxSilenceEvaluator",
     "MinParticipationEvaluator",
     "NotifyChannelHandler",
@@ -101,6 +114,7 @@ __all__ = (
     "ProgressWithinEvaluator",
     "RemoveHandler",
     "ReplyWithinEvaluator",
+    "RuleBasedArbiter",
     "TurnWithinEvaluator",
     "Violation",
     "ViolationHandler",

@@ -22,9 +22,17 @@ from typing import Any
 from autogen.beta.knowledge import KnowledgeStore
 from autogen.beta.task import CheckpointStore
 
-from ..hub.layout import task_checkpoint_path
-
 __all__ = ("HubBackedCheckpointStore",)
+
+
+def _checkpoint_path(task_id: str) -> str:
+    # Mirrors :func:`autogen.beta.network.hub.layout.task_checkpoint_path`.
+    # Inlined here so importing this module does not pull the hub
+    # package into the dependency graph — adapters import from
+    # ``client.tools`` and would otherwise create a cycle through
+    # ``client/__init__.py`` → ``agent_client`` → this module → hub
+    # package → adapters.
+    return f"/tasks/{task_id}/checkpoint.json"
 
 
 class HubBackedCheckpointStore(CheckpointStore):
@@ -40,7 +48,7 @@ class HubBackedCheckpointStore(CheckpointStore):
         self._store = store
 
     async def read(self, task_id: str) -> dict[str, Any] | None:
-        body = await self._store.read(task_checkpoint_path(task_id))
+        body = await self._store.read(_checkpoint_path(task_id))
         if not body:
             return None
         loaded = json.loads(body)
@@ -51,4 +59,4 @@ class HubBackedCheckpointStore(CheckpointStore):
         return loaded
 
     async def write(self, task_id: str, state: dict[str, Any]) -> None:
-        await self._store.write(task_checkpoint_path(task_id), json.dumps(state))
+        await self._store.write(_checkpoint_path(task_id), json.dumps(state))

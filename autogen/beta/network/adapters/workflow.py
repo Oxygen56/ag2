@@ -31,8 +31,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from autogen.beta.events import BaseEvent, ToolCallEvent, ToolResultEvent
-from autogen.beta.events.input_events import DataInput
+from autogen.beta.events import BaseEvent, DataInput, ToolCallEvent, ToolResultEvent
 
 from ..channel import (
     ChannelManifest,
@@ -63,7 +62,13 @@ from ..transitions import (
 )
 from ..views.base import ViewPolicy
 from ..views.builtin import WindowedSummary
-from .base import AdapterResult, default_render_envelope
+from .base import (
+    AdapterResult,
+    default_build_packet_envelope,
+    default_build_text_envelope,
+    default_render_envelope,
+    default_tools_for,
+)
 
 if TYPE_CHECKING:
     from autogen.beta.agent import AgentReply
@@ -425,6 +430,46 @@ class WorkflowAdapter:
         if envelope.event_type == EV_PACKET:
             return _packet_text(envelope)
         return default_render_envelope(envelope)
+
+    def tools_for(self, client, metadata, state, participant_id):
+        """Workflow offers no adapter-level tools.
+
+        Handoff routing is encoded by user-authored ``@tool`` functions
+        that return :class:`Handoff(target=, reason=)`. The handler
+        merges those tools (already on ``agent.tools``) with the
+        identity-level ``NetworkPlugin`` set; the workflow adapter
+        itself contributes nothing.
+        """
+        return default_tools_for(client, metadata, state, participant_id)
+
+    def build_text_envelope(self, channel_id, sender_id, text, *, audience=None, causation_id=None):
+        """Workflow accepts text seeds (e.g. for an initiator's first
+        turn) as plain ``EV_TEXT`` — the adapter folds them into the
+        round-end packet downstream."""
+        return default_build_text_envelope(channel_id, sender_id, text, audience=audience, causation_id=causation_id)
+
+    def build_packet_envelope(
+        self,
+        channel_id,
+        sender_id,
+        body,
+        *,
+        handoff=None,
+        context_set=None,
+        audience=None,
+        causation_id=None,
+    ):
+        """Workflow's native round-end shape — handoff + context_set
+        live in ``routing`` / ``context`` fields."""
+        return default_build_packet_envelope(
+            channel_id,
+            sender_id,
+            body,
+            handoff=handoff,
+            context_set=context_set,
+            audience=audience,
+            causation_id=causation_id,
+        )
 
     # ── Internals ───────────────────────────────────────────────────────────
 

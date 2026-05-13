@@ -31,15 +31,11 @@ from autogen.beta.agent import Agent
 from autogen.beta.task import TaskMetadata, TaskSpec, TaskState
 
 from ..adapters.base import ChannelAdapter
-from ..adapters.consulting import ConsultingAdapter
-from ..adapters.conversation import ConversationAdapter
-from ..adapters.discussion import DiscussionAdapter
-from ..adapters.workflow import WorkflowAdapter
 from ..channel import ChannelMetadata, ChannelState
 from ..envelope import Envelope
 from ..errors import AccessDeniedError, NetworkError, NotFoundError, ProtocolError
-from ..hub.core import PendingTurn
 from ..identity import Passport, Resume
+from ..pending_turn import PendingTurn
 from ..rule import Rule
 from ..transport.frames import (
     AcceptFrame,
@@ -58,6 +54,7 @@ from ..transport.local import LocalLink
 from ..views.base import ViewPolicy
 from .agent_client import AgentClient
 from .chunks import ChunkDelta
+from .human_client import HumanClient
 from .plugin import NetworkPlugin
 
 if TYPE_CHECKING:
@@ -70,7 +67,24 @@ logger = logging.getLogger(__name__)
 
 
 def _builtin_adapters() -> list[ChannelAdapter]:
-    """Adapters registered client-side by default in wire mode."""
+    """Adapters registered client-side by default in wire mode.
+
+    Concrete adapter classes are imported lazily here, not at module
+    top, to break a fundamental cycle introduced when PR5 made each
+    adapter import :func:`make_say_tool` from ``client.tools.say``:
+    pulling concrete adapter classes to the module top of
+    ``hub_client`` would form the chain ``hub_client →
+    adapters.consulting → client.tools.say → client/__init__ →
+    hub_client``. Deferring to call time breaks the cycle without
+    altering call semantics — the function runs at ``HubClient``
+    instantiation, by which point all adapter modules are fully
+    loaded.
+    """
+    from ..adapters.consulting import ConsultingAdapter
+    from ..adapters.conversation import ConversationAdapter
+    from ..adapters.discussion import DiscussionAdapter
+    from ..adapters.workflow import WorkflowAdapter
+
     return [ConsultingAdapter(), ConversationAdapter(), DiscussionAdapter(), WorkflowAdapter()]
 
 
@@ -338,10 +352,21 @@ class HubClient:
 
         ``attach_plugin=True`` (default) attaches the ``NetworkPlugin``
         which adds ``say`` and ``delegate`` to ``agent.tools`` and
-        appends ``NetworkContextPolicy`` to the assembly chain.
+        appends ``NetworkContextPolicy`` to the assembly chain. Pass
+        ``False`` for tests that need a bare agent without LLM tools.
+
+        Rejects ``passport.kind == "human"`` with a guidance error
+        pointing at :meth:`register_human` — the two code paths are
+        deliberately distinct so callers don't accidentally attach an
+        LLM-bound plugin to a non-LLM participant.
         """
         if self._closed:
             raise RuntimeError("HubClient is closed")
+        if passport.kind == "human":
+            raise ValueError(
+                "register() is for agent-kind participants; "
+                "use HubClient.register_human(...) for kind='human' passports"
+            )
 
         client_link = await self._ensure_connected()
         effective_rule = rule if rule is not None else Rule()
@@ -443,6 +468,60 @@ class HubClient:
 
         return client
 
+    async def register_human(
+        self,
+        passport: Passport,
+        *,
+        resume: Resume | None = None,
+        rule: Rule | None = None,
+        auto_ack_invites: bool = True,
+    ) -> HumanClient:
+        """Register a non-LLM participant and return its ``HumanClient`` handle.
+
+        Same UUID7-stamping + persistence path as ``register``; the
+        passport's ``kind`` is forced to ``"human"`` so the participant
+        is discoverable as a human via ``list_agents(kind="human")``.
+
+        No ``Agent`` is attached, no plugin is installed, no assembly
+        policies are added. The returned ``HumanClient`` surfaces inbound
+        envelopes via push (``on_envelope``) and pull (``next_envelope``,
+        ``envelopes``); outbound sends use ``send`` / ``open`` /
+        ``post_envelope`` directly.
+
+        ``auto_ack_invites=True`` (default) makes the human auto-accept
+        channel invites so adapter-driven handshakes complete without UI
+        round-trips. Pass ``False`` if the embedder wants to gate channel
+        joins (and remembers to emit the ``EV_CHANNEL_INVITE_ACK``).
+        """
+        if self._closed:
+            raise RuntimeError("HubClient is closed")
+        if passport.kind not in (None, "human"):
+            raise ValueError(f"register_human() requires kind='human' (or None); got {passport.kind!r}")
+        passport.kind = "human"
+
+        client_link = await self._ensure_connected()
+
+        effective_rule = rule if rule is not None else Rule()
+        effective_resume = resume if resume is not None else Resume()
+        passport = await self._hub.register(passport, effective_resume, rule=effective_rule)
+        assert passport.agent_id is not None
+        self._hub.bind_endpoint(client_link.endpoint_id, passport.agent_id)
+
+        human = HumanClient(
+            passport=passport,
+            resume=effective_resume,
+            rule=effective_rule,
+            hub=self._hub,
+            hub_client=self,
+            auto_ack_invites=auto_ack_invites,
+        )
+        # ``_clients`` is identity-keyed: the receive loop's
+        # ``_dispatch_notify`` looks up by ``recipient_id`` and calls
+        # ``client.receive(envelope)``. ``HumanClient.receive`` satisfies
+        # the same signature so dispatch works without branching.
+        self._clients[passport.agent_id] = human  # type: ignore[assignment]
+        return human
+
     # ── Discovery ────────────────────────────────────────────────────────────
 
     async def get_agent(self, name_or_id: str) -> Passport:
@@ -490,10 +569,11 @@ class HubClient:
         *,
         capability: str | None = None,
         query: str | None = None,
+        kind: str | None = None,
         sort_by: str | None = None,
         limit: int = 50,
     ) -> list[Passport]:
-        key = ("list_agents", capability, query, sort_by, limit)
+        key = ("list_agents", capability, query, kind, sort_by, limit)
         cached = self._discovery_cache.get(key)
         if cached is not None:
             return list(cached)  # type: ignore[arg-type]
@@ -501,6 +581,7 @@ class HubClient:
             result = await self._hub.list_agents(
                 capability=capability,
                 query=query,
+                kind=kind,
                 sort_by=sort_by,
                 limit=limit,
             )
@@ -509,6 +590,7 @@ class HubClient:
                 "list_agents",
                 capability=capability,
                 query=query,
+                kind=kind,
                 sort_by=sort_by,
                 limit=limit,
             )
@@ -688,6 +770,38 @@ class HubClient:
             return
         client_link = await self._ensure_connected()
         await client_link.send_frame(frame)
+
+    async def report_turn_failure(
+        self,
+        *,
+        channel_id: str,
+        agent_id: str,
+        envelope_id: str,
+        exc: BaseException,
+    ) -> None:
+        """Report a notify-handler crash through the hub's observability surface.
+
+        The default notify handler calls this when ``agent.ask`` (or any
+        other step in the substantive path) raises. The hub fans the
+        failure out to every registered :class:`HubListener` (including
+        the built-in ``AuditLog``) — handler code never reaches into
+        hub privates.
+        """
+        await self._hub.report_turn_failure(
+            channel_id=channel_id,
+            agent_id=agent_id,
+            envelope_id=envelope_id,
+            exc=exc,
+        )
+
+    async def fire_task_event(self, task_id: str, kind: str, payload: dict) -> None:
+        """Fan out an ``on_task_event`` through the hub's listener chain.
+
+        Public surface so :class:`TaskMirror` and other tenant
+        observers can emit task-lifecycle events without touching the
+        hub's private fan-out method.
+        """
+        await self._hub.fire_task_event(task_id, kind, payload)
 
     async def read_wal(self, channel_id: str, *, since: int = 0, until: int | None = None) -> list[Envelope]:
         if self._hub is not None:
