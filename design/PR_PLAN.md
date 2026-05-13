@@ -11,8 +11,10 @@ Source of truth for the design itself is [PLAN.md](PLAN.md). This file only cove
 | PR1 | [#2774](https://github.com/ag2ai/ag2/pull/2774) | `feat/network-pr1-task` | `feat(beta): add Task lifecycle primitive` | ✅ merged |
 | PR2 | [#2775](https://github.com/ag2ai/ag2/pull/2775) | `feat/network-pr2-protocol` | `feat(beta/network): protocol, state, and control plane` | ✅ merged |
 | PR3 | [#2776](https://github.com/ag2ai/ag2/pull/2776) | `feat/network-pr3-tools` | `feat(beta/network): LLM tool surface and workflow` | ✅ merged (`5c2247ebb77`) |
-| PR4 | _tbd_ | `feat/network-pr4-foundation` | `feat(beta/network): HumanClient + observability foundation` | 🟢 ready to push (2 commits, 281 unit + 17 anthropic smokes passing) |
-| PR5 | _tbd_ | `feat/network-pr5-adapter-tools-and-subclass` | `feat(beta/network): adapter-owned tools + subclass surface` | 🟢 ready to push (1 commit, 298 unit + 17 anthropic smokes passing) |
+| PR4 | [#2801](https://github.com/ag2ai/ag2/pull/2801) | `feat/network-pr4-foundation` | `feat(beta/network): HumanClient + observability foundation` | ✅ merged (`88c6c95c118`) |
+| PR5 | [#2802](https://github.com/ag2ai/ag2/pull/2802) | `feat/network-pr5-adapter-tools-and-subclass` | `feat(beta/network): adapter-owned tools + subclass surface` | ✅ merged (`57d6afa01eb`) |
+
+`network-design` has been synced with `main` post-PR5 (merge commit `7d5707bb28a` + cycle-fix refactor `16ea14faa8e`). The Phase 2.0 / Phase 3 ports (waves 1–12) sit on top of the stabilization base. Validated: 1948 beta unit pass + 426 network unit pass + 17 anthropic smokes pass.
 
 ## Strategy
 
@@ -362,13 +364,33 @@ These re-enter planning after stabilization merges. The architectural seams adde
 - Public code never references milestone/phase/PR numbers or design docs (CLAUDE.md rule). Module docstrings describe what the code does, not when it shipped.
 - PR bodies follow the existing skeleton (`## Why are these changes needed?` / `## What ships` / `## Test plan` / `## Related issue` / `## Checks` / `## AI assistance`).
 
-### What landed (commits ready to push)
+### What landed
 
-PR4 — `feat/network-pr4-foundation` off `main`:
-- `5ed37b1080c` — `feat(beta/network): add HumanClient + Passport.kind for native HITL`
-- `e78c23d8640` — `feat(beta/network): HubListener + HubArbiter observability layer`
+Both stabilization PRs merged to `main`:
+- PR4 (#2801, squash-merged as `88c6c95c118`) — `feat(beta/network): HumanClient + observability foundation`
+- PR5 (#2802, squash-merged as `57d6afa01eb`) — `feat(beta/network): adapter-owned tools + subclass surface`
 
-PR5 — `feat/network-pr5-adapter-tools-and-subclass` off PR4:
-- `97fd8bbef90` — `feat(beta/network): adapter-owned tools + subclass surface + latent fixes`
+### Post-PR5: `network-design` re-synced with `main`
 
-Validation snapshot when PR5 closed: 298 in-tree network tests + 17 anthropic smokes (`test_workflow_smoke`, `test_network_smoke`, `test_session_smoke`, `test_network_coverage_smoke`, `test_anthropic_integration`) all passing.
+`network-design` now contains the Phase 2.0 + Phase 3 ports (waves 1–12) on top of the post-PR5 stabilization base. Two commits added to bring it in sync:
+
+- `7d5707bb28a` — `Merge origin/main into network-design`. Conflict resolution covered 6 hard-conflict files (`events/__init__.py`, `network/__init__.py`, `hub/__init__.py`, `client/handlers.py`, `client/hub_client.py`, `hub/core.py`) plus 5 auto-merged files audited for semantic correctness (`agent.py`, `adapters/workflow.py`, `hub/expectations.py`, `task_mirror.py`, `test_sweeper_and_registry.py`).
+- `16ea14faa8e` — `refactor(beta/network): lazy HubClient export to remove deferred adapter imports`. Cleans up an import-cycle workaround the merge initially needed (function-level imports in `_builtin_adapters()`); replaces it with a PEP 562 `__getattr__` on `client/__init__.py` so `HubClient` is resolved lazily.
+
+Two semantic decisions that shaped the merge:
+
+1. **AuditLog-as-listener vs explicit appends.** PR4 turned `AuditLog` into a `HubListener` and removed the inline `_audit_log.append(...)` calls from every identity-mutation site in `Hub`. Wave 10 (network-design) had separately added inline appends at those same sites *and* `_broadcast_network_changed(...)` calls for wire-level cache invalidation. The merge keeps PR4's `_fan_out("on_agent_event", ...)` (the listener path) AND wave 10's `_broadcast_network_changed(...)` (the wire path); the explicit `append` calls are dropped because the listener writes the audit records now. `set_rule` does **not** get a network-changed broadcast (intentional asymmetry — rule changes are private to hub-side enforcement and don't invalidate any peer cache).
+
+2. **Sync vs async `HubClient` getters.** PR5 made `HubClient.can_send` / `adapter_for` / `adapter_state` synchronous on the assumption of in-process-only. Wave 10's wire transport needs them async (RPC round-trip when `self._hub is None`). The merged versions are async; PR5's sync call sites in `tools/say.py` and `test_human_client.py` were updated to `await`. Hub-side methods of the same name stay sync — they're O(1) cache lookups.
+
+Two structural fixes were needed:
+
+- **`PendingTurn` extracted to its own module** (`network/pending_turn.py`). `client/hub_client.py` previously imported `PendingTurn` from `hub.core`, but loading `hub.core` triggers concrete-adapter imports that loop back through the adapter→client.tools cycle. The dataclass is small and shared; lifting it out broke that link without changing anyone's import surface (`network.hub.PendingTurn` re-export preserved).
+- **`client/checkpoint.py` inlines `task_checkpoint_path`** instead of importing it from `hub.layout` for the same reason. The path is a single-line `f"/tasks/{task_id}/checkpoint.json"` constant — duplicating it is much cheaper than dragging the hub package into the import graph during `client/__init__.py` evaluation.
+
+### Validation snapshot (post-sync)
+
+- Network unit tests: 426 pass (baseline 365 on pre-merge `network-design`; +61 from PR4/PR5 tests)
+- Full beta unit suite: 1948 pass (baseline 1846; +102 from main's new tests across A2A / knowledge / live voice / MCP / etc.)
+- Anthropic smokes: 17/17 pass (`test_network_smoke`, `test_workflow_smoke`, `test_session_smoke`, `test_network_coverage_smoke`, `test_anthropic_integration`)
+- A2A test collection errors are unrelated — main's #2791 introduced a new dep version expectation (`GetExtendedAgentCardRequest` not in the installed `a2a-sdk`); not introduced by this merge.
