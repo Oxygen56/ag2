@@ -31,6 +31,10 @@ from autogen.beta.agent import Agent
 from autogen.beta.task import TaskMetadata, TaskSpec, TaskState
 
 from ..adapters.base import ChannelAdapter
+from ..adapters.consulting import ConsultingAdapter
+from ..adapters.conversation import ConversationAdapter
+from ..adapters.discussion import DiscussionAdapter
+from ..adapters.workflow import WorkflowAdapter
 from ..channel import ChannelMetadata, ChannelState
 from ..envelope import Envelope
 from ..errors import AccessDeniedError, NetworkError, NotFoundError, ProtocolError
@@ -67,24 +71,7 @@ logger = logging.getLogger(__name__)
 
 
 def _builtin_adapters() -> list[ChannelAdapter]:
-    """Adapters registered client-side by default in wire mode.
-
-    Concrete adapter classes are imported lazily here, not at module
-    top, to break a fundamental cycle introduced when PR5 made each
-    adapter import :func:`make_say_tool` from ``client.tools.say``:
-    pulling concrete adapter classes to the module top of
-    ``hub_client`` would form the chain ``hub_client →
-    adapters.consulting → client.tools.say → client/__init__ →
-    hub_client``. Deferring to call time breaks the cycle without
-    altering call semantics — the function runs at ``HubClient``
-    instantiation, by which point all adapter modules are fully
-    loaded.
-    """
-    from ..adapters.consulting import ConsultingAdapter
-    from ..adapters.conversation import ConversationAdapter
-    from ..adapters.discussion import DiscussionAdapter
-    from ..adapters.workflow import WorkflowAdapter
-
+    """Adapters registered client-side by default in wire mode."""
     return [ConsultingAdapter(), ConversationAdapter(), DiscussionAdapter(), WorkflowAdapter()]
 
 
